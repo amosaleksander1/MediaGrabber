@@ -18,3 +18,4 @@ build/
 *.spec
 __pycache__/
 *.pyc
+*.exe
