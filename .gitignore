@@ -1,0 +1,20 @@
+# Downloaded tool binaries (auto-fetched on first run)
+tools/
+
+# NEVER commit login cookies — they are your live Instagram session!
+cookies.txt
+*.cookies
+
+# Session logs
+logs/
+
+# Local user settings & queue
+config.json
+urls.txt
+
+# Build artifacts
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
