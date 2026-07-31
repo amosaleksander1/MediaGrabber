@@ -45,7 +45,10 @@ def open_path(path):
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 
 APP_NAME = "MediaGrabber"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
+
+# Only check for tool updates this often (or when a tool is missing/broken)
+UPDATE_INTERVAL_DAYS = 14
 
 # Where downloads land (override via config.json / menu [5])
 OUTPUT_DIR = str(Path.home() / "Downloads" / "MediaGrabber")
@@ -637,12 +640,28 @@ def update_gallerydl():
         log(f"Cannot fetch gallery-dl and no local copy exists: {e}", "ERROR")
         return False
 
-def run_updates(cfg):
-    if not cfg.get("auto_update", True):
-        log("Auto-update disabled in config", "WARN")
-        if YTDLP_EXE.exists() and FFMPEG_EXE.exists() and DENO_EXE.exists() and GALLERYDL_EXE.exists():
-            return True
-        log("Tools missing — forcing update despite config", "WARN")
+def tools_present():
+    return all(t.exists() for t in
+               (YTDLP_EXE, FFMPEG_EXE, FFPROBE_EXE, DENO_EXE, GALLERYDL_EXE))
+
+def run_updates(cfg, force=False):
+    """Check/download tools. Throttled: skips entirely if all tools exist and
+       the last check was under UPDATE_INTERVAL_DAYS ago, so users can start
+       downloading immediately. force=True (menu [7], or after a tool failure)
+       always checks."""
+    if not force:
+        if not cfg.get("auto_update", True):
+            log("Auto-update disabled in config", "WARN")
+            if tools_present():
+                return True
+            log("Tools missing — forcing update despite config", "WARN")
+        elif tools_present():
+            versions = load_versions()
+            age = time.time() - versions.get("_last_check", 0)
+            if age < UPDATE_INTERVAL_DAYS * 86400:
+                days_left = UPDATE_INTERVAL_DAYS - age / 86400
+                log(f"Tools ready — next update check in {max(days_left, 0):.0f} day(s) (menu [7] to force)", "OK")
+                return True
 
     ok = True
     if not update_ytdlp():
@@ -653,6 +672,10 @@ def run_updates(cfg):
         ok = False
     if not update_gallerydl():
         ok = False
+
+    versions = load_versions()
+    versions["_last_check"] = time.time()
+    save_versions(versions)
     return ok
 
 # ── LOGIN / COOKIES (auth via browser session) ───────────────────────────────
@@ -818,9 +841,11 @@ def _run_quiet(args, timeout=60):
     except Exception as e:
         return (-1, str(e))
 
-def run_checkup(cfg, probe_auth=True):
-    """Verify all tools run and the Instagram login session works."""
-    log("Running system checkup...", "HEADER")
+def run_checkup(cfg, probe_auth=True, quick=False):
+    """Verify all tools run and the Instagram login session works.
+       quick=True (cold start): existence checks only, and the (slow) live
+       Instagram probe runs only when no cookie cache exists yet."""
+    log("Running system checkup..." + (" (quick)" if quick else ""), "HEADER")
     ok = True
 
     tools = [
@@ -835,6 +860,9 @@ def run_checkup(cfg, probe_auth=True):
             log(f"  [MISSING] {name} — run menu [7] to install", "ERROR")
             ok = False
             continue
+        if quick:
+            log(f"  [OK] {name}: installed", "OK")
+            continue
         rc, out = _run_quiet([str(exe)] + vargs, timeout=30)
         if rc == 0:
             ver = out.strip().splitlines()[0][:60] if out.strip() else "ok"
@@ -842,6 +870,9 @@ def run_checkup(cfg, probe_auth=True):
         else:
             log(f"  [FAIL] {name} did not run: {out.strip()[:100]}", "ERROR")
             ok = False
+
+    if quick:
+        probe_auth = probe_auth and not cookie_cache_valid()
 
     # ── Login / auth check ──
     browser = resolve_cookie_browser(cfg)
@@ -936,19 +967,20 @@ def _clean_caption_words(caption, max_words):
     if not words:
         return None
     name = " ".join(words[:max_words])
-    name = re.sub(r'[<>:"/\\|?*]', "", name).strip(" .-")
+    name = re.sub(r'[<>:"/\\|?*{}]', "", name).strip(" .-")
     return name[:60] or None
 
-def fetch_post_caption(url, cfg):
-    """Fetch the post caption via gallery-dl metadata (no media download)."""
+def probe_post(url, cfg):
+    """Probe a post via gallery-dl metadata (no media download).
+       Returns (media_count, caption); (None, None) if the probe failed."""
     if not GALLERYDL_EXE.exists():
-        return None
+        return (None, None)
     rc, out = _run_quiet(
         [str(GALLERYDL_EXE)] + cookie_args(cfg) + ["-j", url],
         timeout=90,
     )
     if not out:
-        return None
+        return (None, None)
     # gallery-dl -j emits a (pretty-printed, multi-line) JSON array, possibly
     # preceded by warning lines like "[instagram][warning] ...". Try to decode
     # JSON starting at each "[" until one parses.
@@ -963,7 +995,10 @@ def fetch_post_caption(url, cfg):
             data = candidate
             break
     if data is None:
-        return None
+        return (None, None)
+
+    # Entries are [msg_type, ...]; msg_type 3 = one downloadable file
+    count = sum(1 for e in data if isinstance(e, list) and e and e[0] == 3)
 
     def scan(obj):
         if isinstance(obj, dict):
@@ -982,16 +1017,15 @@ def fetch_post_caption(url, cfg):
                     return r
         return None
 
-    return scan(data)
+    return (count if count > 0 else None, scan(data))
 
-def caption_folder_name(url, cfg):
-    """Preferred folder name: first N caption words; fallback: link-based."""
-    cap = fetch_post_caption(url, cfg)
-    if cap:
-        name = _clean_caption_words(cap, int(cfg.get("folder_name_words", 4)))
+def post_base_name(url, caption, cfg):
+    """Human-friendly base name for a post: first N caption words,
+       falling back to the link-based name."""
+    if caption:
+        name = _clean_caption_words(caption, int(cfg.get("folder_name_words", 4)))
         if name:
             return name
-    log("  No usable caption found — falling back to link-based folder name", "WARN")
     return carousel_folder_name(url)
 
 def build_ytdlp_args(url, cfg, resolution_override=None, out_dir_override=None):
@@ -1117,22 +1151,31 @@ def _is_permanent_error(output_lines):
             return True
     return False
 
-def download_carousel_gallerydl(url, sub_dir, cfg, tag):
-    """Download a carousel post (images + videos) via gallery-dl into sub_dir.
-       Returns (success, n_files)."""
+def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
+    """Download a post (images + videos) via gallery-dl into target_dir.
+       Files are named '<base_name> - 01.ext' (or '<base_name>.ext' when
+       single). Returns (success, n_new_files)."""
     if not GALLERYDL_EXE.exists():
         log(f"{tag} gallery-dl not installed — will fall back to yt-dlp", "WARN")
         return (False, 0)
 
-    sub_dir = Path(sub_dir)
-    sub_dir.mkdir(parents=True, exist_ok=True)
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    before = {f.name for f in target_dir.iterdir()}
 
     # -D forces a flat, exact target directory (no site/user nesting)
     args = [
         str(GALLERYDL_EXE),
-        "-D", str(sub_dir),
+        "-D", str(target_dir),
         "--retries", str(cfg.get("max_retries", 3)),
     ]
+
+    # Meaningful filenames instead of gallery-dl's numeric media IDs
+    if base_name:
+        if single:
+            args += ["-f", f"{base_name}.{{extension}}"]
+        else:
+            args += ["-f", f"{base_name} - {{num:>02}}.{{extension}}"]
 
     # Login cookies — Instagram redirects to login without an authed session
     cargs = cookie_args(cfg)
@@ -1142,9 +1185,7 @@ def download_carousel_gallerydl(url, sub_dir, cfg, tag):
         log(f"{tag} No login cookies available — Instagram may reject this (menu [11] / [10])", "WARN")
 
     args.append(url)
-
-    log(f"{tag} Carousel detected — using gallery-dl", "DOWNLOAD")
-    log(f"  Target folder: {sub_dir}", "INFO")
+    log(f"  Target: {target_dir}", "INFO")
 
     try:
         process = subprocess.Popen(
@@ -1169,10 +1210,10 @@ def download_carousel_gallerydl(url, sub_dir, cfg, tag):
         log(f"{tag} gallery-dl crashed: {e}", "ERROR")
         return (False, 0)
 
-    files = [f for f in sub_dir.iterdir() if f.is_file()]
-    if process.returncode == 0 and files:
-        return (True, len(files))
-    return (False, len(files))
+    new_files = [f for f in target_dir.iterdir() if f.is_file() and f.name not in before]
+    if process.returncode == 0 and new_files:
+        return (True, len(new_files))
+    return (False, len(new_files))
 
 def download_single(url, cfg, index, total, resolution_override=None):
     """Download a single URL with smart retry. Returns (url, success, message)."""
@@ -1180,19 +1221,31 @@ def download_single(url, cfg, index, total, resolution_override=None):
     max_attempts = cfg.get("max_retries", 3)
     out_dir = cfg.get("output_dir", OUTPUT_DIR)
 
-    # ── Carousel route: subfolder named from the post caption -> files inside ──
-    carousel = is_carousel_candidate(url)
-    if carousel:
-        log(f"{tag} Fetching post caption for folder name...", "INFO")
-        folder = caption_folder_name(url, cfg)
-        log(f"{tag} Folder name: {folder}", "OK")
-        sub_dir = Path(out_dir) / folder
-        ok, n = download_carousel_gallerydl(url, sub_dir, cfg, tag)
-        if ok:
-            log(f"{tag} Completed: {n} file(s) -> {sub_dir.name}\\", "OK")
-            return (url, True, f"OK ({n} files in {sub_dir.name})")
-        log(f"{tag} gallery-dl failed — falling back to yt-dlp", "WARN")
-        out_dir = str(sub_dir)  # yt-dlp fallback also downloads into the subfolder
+    # Self-heal: a missing tool triggers an immediate (forced) update
+    if not YTDLP_EXE.exists() or (is_carousel_candidate(url) and not GALLERYDL_EXE.exists()):
+        log(f"{tag} Required tool missing — updating tools now...", "WARN")
+        run_updates(cfg, force=True)
+
+    # ── IG/TikTok posts: probe first. Real carousels (2+ items) get their own
+    #    caption-named subfolder; single posts download normally. ──
+    carousel = False
+    base_name = None
+    if is_carousel_candidate(url):
+        log(f"{tag} Probing post metadata...", "INFO")
+        count, caption = probe_post(url, cfg)
+        base_name = post_base_name(url, caption, cfg)
+        if count and count > 1:
+            carousel = True
+            sub_dir = Path(out_dir) / base_name
+            log(f"{tag} Carousel ({count} items) -> {base_name}", "OK")
+            ok, n = download_gallerydl(url, sub_dir, cfg, tag, base_name=base_name)
+            if ok:
+                log(f"{tag} Completed: {n} file(s) -> {sub_dir.name}", "OK")
+                return (url, True, f"OK ({n} files in {sub_dir.name})")
+            log(f"{tag} gallery-dl failed — falling back to yt-dlp", "WARN")
+            out_dir = str(sub_dir)  # yt-dlp fallback also downloads into the subfolder
+        else:
+            log(f"{tag} Single post — downloading normally", "INFO")
 
     for attempt in range(1, max_attempts + 1):
         if attempt == 1:
@@ -1262,11 +1315,26 @@ def download_single(url, cfg, index, total, resolution_override=None):
                 time.sleep(3 * attempt)
                 continue
 
-            # Out of retries
+            # Out of retries — for single IG/TikTok posts (e.g. image posts
+            # yt-dlp can't handle), try gallery-dl as a last resort
+            if is_carousel_candidate(url) and not carousel:
+                log(f"{tag} yt-dlp failed — trying gallery-dl for this post", "WARN")
+                ok, n = download_gallerydl(url, Path(out_dir), cfg, tag,
+                                           base_name=base_name, single=True)
+                if ok:
+                    log(f"{tag} Completed via gallery-dl: {url}", "OK")
+                    return (url, True, "OK (gallery-dl)")
+
             err = "\n".join(output_lines[-5:])
             log(f"{tag} Failed after {max_attempts} attempts: {url}", "ERROR")
             log(f"  Last output: {err}", "ERROR")
             return (url, False, f"Failed after {max_attempts} attempts")
+
+        except FileNotFoundError:
+            # Tool binary vanished/corrupt — reinstall and retry this attempt
+            log(f"{tag} Downloader binary missing — reinstalling tools...", "ERROR")
+            run_updates(cfg, force=True)
+            continue
 
         except Exception as e:
             log(f"{tag} Crashed: {url} — {e}", "ERROR")
@@ -1333,6 +1401,7 @@ def show_menu(cfg):
 │  {C.GREEN}[9]{C.RESET}{C.BOLD}  Open urls.txt for editing               │
 │  {C.GREEN}[10]{C.RESET}{C.BOLD} Checkup (tools + login)                 │
 │  {C.GREEN}[11]{C.RESET}{C.BOLD} Set login cookie browser                │
+│  {C.GREEN}[12]{C.RESET}{C.BOLD} Delete saved login cookies              │
 │  {C.GREEN}[0]{C.RESET}{C.BOLD}  Exit                                    │
 └──────────────────────────────────────────────┘{C.RESET}
 """)
@@ -1468,14 +1537,14 @@ def main():
         read_urls()
         log(f"Created urls.txt at {URLS_FILE}", "INFO")
 
-    # Auto-update tools on startup
+    # Tool check on startup (throttled to every UPDATE_INTERVAL_DAYS)
     log("Checking tools...", "HEADER")
     if not run_updates(cfg):
         log("Some tools could not be downloaded. Downloads may fail.", "ERROR")
     print()
 
-    # Cold-start checkup: verify tools run and login session is valid
-    run_checkup(cfg)
+    # Quick cold-start checkup — fast; full probe only if login cache missing
+    run_checkup(cfg, quick=True)
     print()
 
     # Main loop
@@ -1500,7 +1569,7 @@ def main():
                 log(f"Auto-update {'enabled' if cfg['auto_update'] else 'disabled'}", "OK")
             elif choice == "7":
                 log("Forcing tool update...", "UPDATE")
-                run_updates(cfg)
+                run_updates(cfg, force=True)
             elif choice == "8":
                 out = cfg.get("output_dir", OUTPUT_DIR)
                 open_path(out)
@@ -1510,6 +1579,15 @@ def main():
                 run_checkup(cfg)
             elif choice == "11":
                 choose_cookie_browser(cfg)
+            elif choice == "12":
+                if COOKIES_FILE.exists():
+                    try:
+                        COOKIES_FILE.unlink()
+                        log("Saved login cookies deleted. They will be re-exported from your browser when next needed.", "OK")
+                    except Exception as e:
+                        log(f"Could not delete cookie cache: {e}", "ERROR")
+                else:
+                    log("No saved login cookies to delete.", "INFO")
             elif choice == "0":
                 log("Exiting. Goodbye!", "INFO")
                 break

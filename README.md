@@ -7,10 +7,10 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 
 - **Batch or single downloads** — queue links in `urls.txt` or paste one at a time
 - **Video & audio modes** — MP4/MKV/WebM/… video, MP3/FLAC/Opus/… audio, resolution capping
-- **Instagram & TikTok carousels** — downloads *all* slides (images **and** videos) of a multi-item post into its own subfolder, automatically named from the post caption (e.g. `pink ketemu butter yellow/`)
+- **Instagram & TikTok carousels** — detects real multi-item posts, downloads *all* slides (images **and** videos) into a subfolder named from the post caption (e.g. `pink ketemu butter yellow/`), with files named to match (`pink ketemu butter yellow - 01.jpg`). Single reels/posts download normally — no folder.
 - **Baked-in login** — borrows your existing browser session (no password stored), with a one-time cookie export so downloads work while the browser is open
-- **Self-maintaining** — yt-dlp, ffmpeg, Deno and gallery-dl are downloaded and kept up to date automatically
-- **Cold-start checkup** — verifies every tool runs and your Instagram login is valid before you download anything
+- **Self-maintaining, never in your way** — yt-dlp, ffmpeg, Deno and gallery-dl are auto-downloaded; update checks run at most every 14 days (or when a tool breaks), so startup is instant and downloads begin immediately
+- **Quick cold-start checkup** — instant verification that tools and login are in place; full live probe on demand via menu `[10]`
 - **Smart retries** — transient errors retry with backoff; permanent errors (private/removed posts) fail fast
 
 ## Requirements
@@ -45,7 +45,8 @@ Then use the menu:
 [3]  Change format (Video/Audio)   [9]  Open urls.txt for editing
 [4]  Change resolution             [10] Checkup (tools + login)
 [5]  Change output folder          [11] Set login cookie browser
-[6]  Toggle auto-update            [0]  Exit
+[6]  Toggle auto-update            [12] Delete saved login cookies
+[0]  Exit
 ```
 
 ## How login works (no password stored)
@@ -59,18 +60,21 @@ where you're already logged in**:
 3. All later downloads use the cached file, browser open or not. If the session expires, the checkup detects it, re-exports, and re-probes automatically.
 
 > ⚠️ `tools/cookies.txt` **is your live Instagram session**. Anyone with that file can act
-> as your account. It is `.gitignore`d — never commit or share it.
+> as your account. It is `.gitignore`d — never commit or share it. Use menu `[12]`
+> to delete it any time (it re-exports automatically when next needed).
 
 ## Carousel downloads
 
 Any Instagram post/reel (`instagram.com/p/…`, `/reel/…`) or TikTok photo post
-(`tiktok.com/@user/photo/…`, `vt.tiktok.com/…`) is treated as a potential carousel:
+(`tiktok.com/@user/photo/…`, `vt.tiktok.com/…`) is probed first (metadata only):
 
-1. The post caption is fetched first; the folder is named from its first words
-   (default 4 — set `folder_name_words` in `config.json`). Emojis, hashtags,
-   mentions and links are stripped. No caption → folder named from the link
-   (`instagram_<shortcode>`).
-2. **gallery-dl** downloads every slide — images and videos — flat into that folder.
+1. **Single item** → downloaded normally into the output folder, standard naming.
+   If yt-dlp can't handle it (e.g. a single image post), gallery-dl takes over.
+2. **2+ items (real carousel)** → a subfolder is created, named from the first
+   caption words (default 4 — `folder_name_words` in `config.json`; emojis,
+   hashtags, mentions and links stripped; no caption → `instagram_<shortcode>`).
+   **gallery-dl** downloads every slide — images and videos — into it, with
+   files named `<folder name> - 01.jpg`, `- 02.mp4`, … instead of numeric media IDs.
 3. If gallery-dl fails, the app falls back to yt-dlp targeting the same folder.
 
 Regular links (YouTube etc.) are unaffected and go straight into the output folder.
