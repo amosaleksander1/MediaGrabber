@@ -2,6 +2,19 @@
 
 All notable changes to MediaGrabber.
 
+## [2.2.1] — 2026-08-12
+
+### Fixed
+- **TikTok "Unexpected response from webpage request"** — TikTok started
+  rejecting yt-dlp's default User-Agent worldwide on 2026-08-10 (upstream
+  issue yt-dlp#17403). Both engines now send a real Chrome UA (+ TikTok
+  Referer for yt-dlp) on tiktok.com URLs.
+- gallery-dl last-resort fallback now also covers TikTok `/video/` links,
+  not just carousel-style URLs.
+
+### Added
+- `[Press Q to cancel]` reminder shown inline on the download progress bar.
+
 ## [2.2.0] — 2026-08-12
 
 ### Added

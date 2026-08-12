@@ -86,10 +86,15 @@ def _stop_hint():
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 
 APP_NAME = "MediaGrabber"
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.2.1"
 
 # Only check for tool updates this often (or when a tool is missing/broken)
 UPDATE_INTERVAL_DAYS = 14
+
+# Real-browser User-Agent. TikTok rejects yt-dlp's default UA with
+# "Unexpected response from webpage request" since Aug 2026 (yt-dlp #17403).
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
 
 # Where downloads land (override via config.json / menu [5])
 OUTPUT_DIR = str(Path.home() / "Downloads" / "MediaGrabber")
@@ -1096,6 +1101,12 @@ def build_ytdlp_args(url, cfg, resolution_override=None, out_dir_override=None):
     if needs_login(url):
         args += cookie_args(cfg)
 
+    # TikTok workaround (Aug 2026): default UA gets "Unexpected response from
+    # webpage request" — a real browser UA + Referer fixes it (yt-dlp #17403)
+    if re.search(r"tiktok\.com", url, re.IGNORECASE):
+        args += ["--user-agent", BROWSER_UA,
+                 "--add-headers", "Referer:https://www.tiktok.com/"]
+
     # Mode
     mode = cfg.get("mode", "video")
     if mode == "audio":
@@ -1228,6 +1239,10 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
         "--retries", str(cfg.get("max_retries", 3)),
     ]
 
+    # TikTok workaround (Aug 2026): real browser UA (see yt-dlp #17403)
+    if re.search(r"tiktok\.com", url, re.IGNORECASE):
+        args += ["--user-agent", BROWSER_UA]
+
     # Meaningful filenames instead of gallery-dl's numeric media IDs
     if base_name:
         if single:
@@ -1347,7 +1362,7 @@ def download_single(url, cfg, index, total, resolution_override=None):
                 output_lines.append(line)
 
                 if "[download]" in line and "%" in line:
-                    print(f"\r  {C.DIM}{line.strip()}{C.RESET}", end="", flush=True)
+                    print(f"\r  {C.DIM}{line.strip()}{C.RESET}   {C.YELLOW}[Press Q to cancel]{C.RESET}", end="", flush=True)
                 elif "[download]" in line and "Destination" in line:
                     print()
                     log(f"  {line.strip()}", "INFO")
@@ -1396,9 +1411,9 @@ def download_single(url, cfg, index, total, resolution_override=None):
                 time.sleep(3 * attempt)
                 continue
 
-            # Out of retries — for single IG/TikTok posts (e.g. image posts
-            # yt-dlp can't handle), try gallery-dl as a last resort
-            if is_carousel_candidate(url) and not carousel:
+            # Out of retries — for IG/TikTok posts (image posts yt-dlp can't
+            # handle, or TikTok endpoint breakage), try gallery-dl as a last resort
+            if needs_login(url) and not carousel:
                 log(f"{tag} yt-dlp failed — trying gallery-dl for this post", "WARN")
                 ok, n = download_gallerydl(url, Path(out_dir), cfg, tag,
                                            base_name=base_name, single=True)
