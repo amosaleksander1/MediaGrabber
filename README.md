@@ -11,7 +11,8 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 - **Baked-in login** — borrows your existing browser session (no password stored), with a one-time cookie export so downloads work while the browser is open
 - **Self-maintaining, never in your way** — yt-dlp, ffmpeg, Deno and gallery-dl are auto-downloaded; update checks run at most every 14 days (or when a tool breaks), so startup is instant and downloads begin immediately
 - **Quick cold-start checkup** — instant verification that tools and login are in place; full live probe on demand via menu `[10]`
-- **Smart retries** — transient errors retry with backoff; permanent errors (private/removed posts) fail fast
+- **Smart retries** — transient errors retry with backoff; permanent errors (private/removed posts) fail fast; extraction errors from an outdated downloader trigger an automatic tool update + retry
+- **Graceful stop** — press `Q` during downloads (Linux: `Q` then Enter) to cancel cleanly without killing the app
 
 ## Requirements
 

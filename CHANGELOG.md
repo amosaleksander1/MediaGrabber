@@ -2,6 +2,18 @@
 
 All notable changes to MediaGrabber.
 
+## [2.2.0] — 2026-08-12
+
+### Added
+- **Graceful stop** — press `Q` during any download (Windows: instant;
+  Linux: `Q` then Enter) to cancel cleanly and return to the menu. Partial
+  temp files are removed; in batch mode remaining URLs stay in `urls.txt`.
+  No more Ctrl+C closing the whole app.
+- **Outdated-tool auto-recovery** — extraction errors that indicate an
+  outdated downloader (e.g. TikTok's JS challenge breaking older yt-dlp:
+  `Unable to extract`, `JS challenge`, HTTP 403) now trigger an automatic
+  forced tool update and a free retry, bypassing the 14-day throttle.
+
 ## [2.1.0] — 2026-07-31
 
 ### Added

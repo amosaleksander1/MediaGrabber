@@ -42,10 +42,51 @@ def open_path(path):
         subprocess.Popen(["xdg-open", str(path)],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+# ── GRACEFUL STOP (press Q during downloads) ─────────────────────────────────
+
+class DownloadStopped(Exception):
+    """Raised when the user presses Q to stop the current download."""
+
+if IS_WIN:
+    import msvcrt
+
+def _stop_requested():
+    """Non-blocking check: did the user press Q?
+       Windows: instant keypress. Linux: type q then Enter."""
+    try:
+        if IS_WIN:
+            while msvcrt.kbhit():
+                if msvcrt.getwch().lower() == "q":
+                    return True
+        else:
+            import select
+            r, _, _ = select.select([sys.stdin], [], [], 0)
+            if r:
+                if sys.stdin.readline().strip().lower() == "q":
+                    return True
+    except Exception:
+        pass
+    return False
+
+def _stop_process(process):
+    """Terminate a child process, escalating to kill if needed."""
+    try:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except Exception:
+            process.kill()
+    except Exception:
+        pass
+
+def _stop_hint():
+    hint = "Press Q to stop downloads" + ("" if IS_WIN else " (Q then Enter)")
+    log(hint, "INFO")
+
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 
 APP_NAME = "MediaGrabber"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 # Only check for tool updates this often (or when a tool is missing/broken)
 UPDATE_INTERVAL_DAYS = 14
@@ -1151,6 +1192,23 @@ def _is_permanent_error(output_lines):
             return True
     return False
 
+# Errors that usually mean the downloader itself is outdated (sites like
+# TikTok/Instagram change frequently; e.g. TikTok's JS challenge breaks old
+# yt-dlp versions). These trigger a forced tool update + one free retry.
+TOOL_FAILURE_MARKERS = [
+    "unable to extract",
+    "js challenge",
+    "failed to solve",
+    "unsupported url",
+    "please report this issue",
+    "confirm you are on the latest version",
+    "http error 403",
+]
+
+def _is_tool_failure(output_lines):
+    combined = " ".join(output_lines[-15:]).lower()
+    return any(m in combined for m in TOOL_FAILURE_MARKERS)
+
 def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
     """Download a post (images + videos) via gallery-dl into target_dir.
        Files are named '<base_name> - 01.ext' (or '<base_name>.ext' when
@@ -1198,6 +1256,10 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
             creationflags=NO_WINDOW,
         )
         for line in process.stdout:
+            if _stop_requested():
+                log(f"{tag} Stop requested — cancelling download...", "WARN")
+                _stop_process(process)
+                raise DownloadStopped()
             line = line.rstrip()
             if not line:
                 continue
@@ -1206,6 +1268,8 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
             else:
                 log(f"  {line}", "INFO")
         process.wait()
+    except DownloadStopped:
+        raise
     except Exception as e:
         log(f"{tag} gallery-dl crashed: {e}", "ERROR")
         return (False, 0)
@@ -1247,7 +1311,10 @@ def download_single(url, cfg, index, total, resolution_override=None):
         else:
             log(f"{tag} Single post — downloading normally", "INFO")
 
-    for attempt in range(1, max_attempts + 1):
+    attempt = 0
+    updated_once = False
+    while attempt < max_attempts:
+        attempt += 1
         if attempt == 1:
             log(f"{tag} Starting: {url}", "DOWNLOAD")
         else:
@@ -1269,6 +1336,11 @@ def download_single(url, cfg, index, total, resolution_override=None):
 
             output_lines = []
             for line in process.stdout:
+                if _stop_requested():
+                    print()
+                    log(f"{tag} Stop requested — cancelling download...", "WARN")
+                    _stop_process(process)
+                    raise DownloadStopped()
                 line = line.rstrip()
                 if not line:
                     continue
@@ -1310,6 +1382,15 @@ def download_single(url, cfg, index, total, resolution_override=None):
                 log(f"  {err_tail}", "ERROR")
                 return (url, False, "Permanent error — video unavailable/private/blocked")
 
+            # Outdated-tool error (e.g. TikTok JS challenge vs old yt-dlp)?
+            # Force-update tools once and retry without consuming an attempt.
+            if not updated_once and _is_tool_failure(output_lines):
+                log(f"{tag} Failure looks tool-related — force-updating tools and retrying...", "WARN")
+                run_updates(cfg, force=True)
+                updated_once = True
+                attempt -= 1
+                continue
+
             # Transient error — retry if attempts remain
             if attempt < max_attempts:
                 time.sleep(3 * attempt)
@@ -1329,6 +1410,15 @@ def download_single(url, cfg, index, total, resolution_override=None):
             log(f"{tag} Failed after {max_attempts} attempts: {url}", "ERROR")
             log(f"  Last output: {err}", "ERROR")
             return (url, False, f"Failed after {max_attempts} attempts")
+
+        except DownloadStopped:
+            # Clean up partial temp files, then let the caller stop the batch
+            for tmp in Path(out_dir).glob("*._MGTMP_.*"):
+                try:
+                    tmp.unlink()
+                except Exception:
+                    pass
+            raise
 
         except FileNotFoundError:
             # Tool binary vanished/corrupt — reinstall and retry this attempt
@@ -1476,9 +1566,16 @@ def process_batch(cfg):
 
     print(f"{C.DIM}{'─' * 55}{C.RESET}")
 
+    _stop_hint()
     results = []
+    stopped = False
     for i, url in enumerate(urls, 1):
-        result = download_single(url, cfg, i, total, resolution_override=batch_res)
+        try:
+            result = download_single(url, cfg, i, total, resolution_override=batch_res)
+        except DownloadStopped:
+            log("Downloads stopped by user — remaining URLs kept in urls.txt.", "WARN")
+            stopped = True
+            break
         results.append(result)
         print(f"{C.DIM}{'─' * 55}{C.RESET}")
 
@@ -1489,11 +1586,12 @@ def process_batch(cfg):
     print(f"  SUMMARY: {C.GREEN}{ok_count} succeeded{C.RESET}{C.BOLD}, {C.RED}{fail_count} failed{C.RESET}{C.BOLD} / {total} total")
     print(f"{'═' * 55}{C.RESET}\n")
 
-    if fail_count > 0:
-        log("Failed URLs:", "ERROR")
-        for url, ok, msg in results:
-            if not ok:
-                log(f"  {url} — {msg}", "ERROR")
+    if fail_count > 0 or stopped:
+        if fail_count > 0:
+            log("Failed URLs:", "ERROR")
+            for url, ok, msg in results:
+                if not ok:
+                    log(f"  {url} — {msg}", "ERROR")
     else:
         clear_urls()
         log("All downloads succeeded. urls.txt cleared.", "OK")
@@ -1512,7 +1610,11 @@ def process_single(cfg):
         res_override = prompt_resolution(url)
 
     print(f"{C.DIM}{'─' * 55}{C.RESET}")
-    download_single(url, cfg, 1, 1, resolution_override=res_override)
+    _stop_hint()
+    try:
+        download_single(url, cfg, 1, 1, resolution_override=res_override)
+    except DownloadStopped:
+        log("Download stopped by user.", "WARN")
     print(f"{C.DIM}{'─' * 55}{C.RESET}")
 
 # ── MAIN ─────────────────────────────────────────────────────────────────────
