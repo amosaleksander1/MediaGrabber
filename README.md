@@ -56,8 +56,10 @@ Instagram rejects anonymous downloads, and scripted username/password logins get
 (and break with 2FA). MediaGrabber instead **borrows the session cookies from a browser
 where you're already logged in**:
 
-1. Menu `[11]` — pick your browser. Supported: **Zen**, Firefox, Chrome, Edge, Brave, Vivaldi, Opera. `auto` prefers Firefox-family browsers because Chromium browsers lock their cookie database while running.
-2. The app exports your cookies **once** to `tools/cookies.txt`. If a Chromium browser is holding the lock, the app asks you to close it, then retries — that's the only time closing your browser is needed.
+1. Menu `[11]` — pick your browser. Supported: **Zen**, Firefox, Chrome, Edge, Brave, Vivaldi, Opera.
+2. The app exports your cookies **once** to `tools/cookies.txt`.
+   - **Chrome / Edge / Brave / Vivaldi / Opera (Windows):** since Chrome v127 these use App-Bound Encryption that download tools can't read (yt-dlp#10927). MediaGrabber works around it automatically — it launches your browser headless against a temporary copy of the profile with the DevTools Protocol and asks the browser to decrypt its **own** cookies. No browser settings are changed. (Best results when the browser isn't mid-update.)
+   - **Firefox / Zen:** read directly, no workaround needed.
 3. All later downloads use the cached file, browser open or not. If the session expires, the checkup detects it, re-exports, and re-probes automatically.
 
 > ⚠️ `tools/cookies.txt` **is your live Instagram session**. Anyone with that file can act

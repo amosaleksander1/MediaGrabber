@@ -6,6 +6,7 @@ Reads URLs from urls.txt, downloads via yt-dlp, converts with ffmpeg.
 
 import os
 import sys
+import base64
 import subprocess
 import zipfile
 import tarfile
@@ -86,7 +87,7 @@ def _stop_hint():
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 
 APP_NAME = "MediaGrabber"
-APP_VERSION = "2.3.0"
+APP_VERSION = "2.4.0"
 
 # Only check for tool updates this often (or when a tool is missing/broken)
 UPDATE_INTERVAL_DAYS = 14
@@ -811,6 +812,270 @@ def cookie_args(cfg):
 
 # Output markers that mean the browser is locking its cookie database
 COOKIE_LOCK_MARKERS = ["could not copy", "permission denied", "errno 13"]
+# Markers that mean Chrome's App-Bound Encryption (v127+) blocked decryption
+COOKIE_ABE_MARKERS = ["could not copy", "dpapi", "failed to decrypt",
+                      "app-bound", "v10", "v20", "'nonetype'"]
+
+CHROMIUM_BROWSERS = ("chrome", "edge", "brave", "vivaldi", "opera")
+
+# ── Chrome App-Bound-Encryption workaround (via DevTools Protocol) ────────────
+# Since Chrome v127 (2024) Windows cookies use App-Bound Encryption: only a
+# process Chrome's elevation service trusts (i.e. Chrome itself) can decrypt
+# them, so yt-dlp/gallery-dl fail (yt-dlp #10927). Fix: launch the real Chrome
+# headless against a COPY of the profile with remote debugging enabled, ask
+# Chrome to hand us the decrypted cookies over the DevTools Protocol, and write
+# them to our Netscape cookies.txt cache. No security settings are changed.
+
+def _chromium_exe_names(browser):
+    return {
+        "chrome":  ["chrome.exe"],
+        "edge":    ["msedge.exe"],
+        "brave":   ["brave.exe"],
+        "vivaldi": ["vivaldi.exe"],
+        "opera":   ["opera.exe", "launcher.exe"],
+    }.get(browser, [])
+
+def find_chromium_binary(browser):
+    """Locate a Chromium-family browser executable on Windows."""
+    if not IS_WIN:
+        return None
+    names = _chromium_exe_names(browser)
+    # 1) Registry App Paths
+    try:
+        import winreg
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for exe in names:
+                try:
+                    key = winreg.OpenKey(
+                        hive,
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\\" + exe)
+                    val, _ = winreg.QueryValueEx(key, None)
+                    if val and Path(val).exists():
+                        return val
+                except OSError:
+                    continue
+    except Exception:
+        pass
+    # 2) Common install locations
+    roots = [os.environ.get("PROGRAMFILES", r"C:\Program Files"),
+             os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
+             os.environ.get("LOCALAPPDATA", "")]
+    subdirs = {
+        "chrome":  [r"Google\Chrome\Application"],
+        "edge":    [r"Microsoft\Edge\Application"],
+        "brave":   [r"BraveSoftware\Brave-Browser\Application"],
+        "vivaldi": [r"Vivaldi\Application"],
+        "opera":   [r"Opera", r"Programs\Opera"],
+    }.get(browser, [])
+    for root in roots:
+        if not root:
+            continue
+        for sub in subdirs:
+            for exe in names:
+                p = Path(root) / sub / exe
+                if p.exists():
+                    return str(p)
+    return None
+
+class _MiniWS:
+    """Minimal RFC6455 WebSocket client (text frames only) — stdlib only."""
+    def __init__(self, ws_url, timeout=20):
+        import socket
+        from urllib.parse import urlparse
+        u = urlparse(ws_url)
+        host, port = u.hostname, u.port or 80
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.sock.settimeout(timeout)
+        key = base64.b64encode(os.urandom(16)).decode()
+        path = u.path + (("?" + u.query) if u.query else "")
+        req = (f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+               "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+               f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n")
+        self.sock.sendall(req.encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise OSError("WebSocket handshake failed")
+            buf += chunk
+        if b" 101 " not in buf.split(b"\r\n", 1)[0]:
+            raise OSError("WebSocket upgrade rejected")
+        self._tail = buf.split(b"\r\n\r\n", 1)[1]
+
+    def send(self, text):
+        payload = text.encode()
+        header = bytearray([0x81])  # FIN + text opcode
+        mask = os.urandom(4)
+        n = len(payload)
+        if n < 126:
+            header.append(0x80 | n)
+        elif n < 65536:
+            header.append(0x80 | 126)
+            header += n.to_bytes(2, "big")
+        else:
+            header.append(0x80 | 127)
+            header += n.to_bytes(8, "big")
+        header += mask
+        masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        self.sock.sendall(bytes(header) + masked)
+
+    def _recv_exact(self, n):
+        data = self._tail
+        self._tail = b""
+        while len(data) < n:
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                raise OSError("WebSocket closed")
+            data += chunk
+        self._tail = data[n:]
+        return data[:n]
+
+    def recv(self):
+        """Receive one (possibly multi-frame) text message; returns str."""
+        out = b""
+        while True:
+            b0, b1 = self._recv_exact(2)
+            fin = b0 & 0x80
+            length = b1 & 0x7F
+            if length == 126:
+                length = int.from_bytes(self._recv_exact(2), "big")
+            elif length == 127:
+                length = int.from_bytes(self._recv_exact(8), "big")
+            out += self._recv_exact(length) if length else b""
+            if fin:
+                return out.decode("utf-8", "replace")
+
+    def close(self):
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+def _cdp_cookies_to_netscape(cookies, path):
+    """Write CDP Network.getAllCookies output to a Netscape cookies.txt."""
+    lines = ["# Netscape HTTP Cookie File", "# Exported by MediaGrabber", ""]
+    n = 0
+    for c in cookies:
+        domain = c.get("domain", "")
+        if not domain:
+            continue
+        flag = "TRUE" if domain.startswith(".") else "FALSE"
+        cpath = c.get("path", "/") or "/"
+        secure = "TRUE" if c.get("secure") else "FALSE"
+        expires = int(c.get("expires", 0) or 0)
+        if expires < 0:
+            expires = 0
+        name = c.get("name", "")
+        value = c.get("value", "")
+        prefix = "#HttpOnly_" if c.get("httpOnly") else ""
+        lines.append(f"{prefix}{domain}\t{flag}\t{cpath}\t{secure}\t{expires}\t{name}\t{value}")
+        n += 1
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return n
+
+def export_chrome_cookies_cdp(browser, cfg, domains=("instagram.com", "tiktok.com")):
+    """Export decrypted cookies from a Chromium browser via the DevTools
+       Protocol into COOKIES_FILE. Returns True on success. Works around
+       App-Bound Encryption because Chrome decrypts its own cookies."""
+    import socket as _socket, shutil as _shutil, tempfile, json as _json
+    from urllib.request import urlopen as _urlopen
+
+    exe = find_chromium_binary(browser)
+    if not exe:
+        log(f"Could not locate {browser.title()} executable for cookie export.", "WARN")
+        return False
+
+    user_data = _browser_profile_paths().get(browser)
+    if not user_data or not Path(user_data).exists():
+        log(f"{browser.title()} profile folder not found.", "WARN")
+        return False
+
+    profile = cfg.get("chrome_profile", "Default")
+    src = Path(user_data)
+    tmp = Path(tempfile.mkdtemp(prefix="mg_cookies_"))
+    proc = None
+    try:
+        # Copy just enough of the profile: the ABE key (Local State) + cookies DB
+        shutil.copyfile(src / "Local State", tmp / "Local State")
+        dst_prof = tmp / profile / "Network"
+        dst_prof.mkdir(parents=True, exist_ok=True)
+        for rel in (Path(profile) / "Network" / "Cookies", Path(profile) / "Cookies"):
+            if (src / rel).exists():
+                shutil.copyfile(src / rel, tmp / profile / "Network" / "Cookies")
+                break
+
+        # Free port
+        s = _socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+
+        log(f"Asking {browser.title()} to decrypt its own cookies (DevTools)...", "UPDATE")
+        proc = subprocess.Popen(
+            [exe, f"--user-data-dir={tmp}", f"--profile-directory={profile}",
+             "--headless=new", f"--remote-debugging-port={port}",
+             "--remote-allow-origins=*", "--no-first-run",
+             "--no-default-browser-check", "--disable-gpu",
+             "--disable-extensions", "--disable-sync", "about:blank"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=NO_WINDOW,
+        )
+
+        # Wait for the DevTools endpoint
+        ws_url = None
+        for _ in range(40):  # ~20s
+            try:
+                with _urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as r:
+                    ws_url = _json.loads(r.read().decode()).get("webSocketDebuggerUrl")
+                if ws_url:
+                    break
+            except Exception:
+                time.sleep(0.5)
+        if not ws_url:
+            log("DevTools endpoint did not come up.", "ERROR")
+            return False
+
+        ws = _MiniWS(ws_url, timeout=20)
+        try:
+            ws.send(_json.dumps({"id": 1, "method": "Network.getAllCookies"}))
+            cookies = []
+            for _ in range(20):
+                msg = _json.loads(ws.recv())
+                if msg.get("id") == 1:
+                    cookies = msg.get("result", {}).get("cookies", [])
+                    break
+        finally:
+            ws.close()
+
+        if not cookies:
+            log("No cookies returned by DevTools.", "WARN")
+            return False
+
+        # Keep only cookies relevant to the sites we log into (smaller, safer file)
+        wanted = [c for c in cookies
+                  if any(d in (c.get("domain", "") or "") for d in domains)]
+        use = wanted or cookies
+        n = _cdp_cookies_to_netscape(use, COOKIES_FILE)
+        log(f"Exported {n} cookie(s) from {browser.title()} -> {COOKIES_FILE.name}", "OK")
+        return n > 0
+
+    except Exception as e:
+        log(f"Chrome cookie export failed: {e}", "ERROR")
+        return False
+    finally:
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        try:
+            _shutil.rmtree(tmp, ignore_errors=True)
+        except Exception:
+            pass
 
 def refresh_cookie_cache(cfg, interactive=True):
     """Export browser login cookies to tools/cookies.txt so downloads keep
@@ -835,9 +1100,22 @@ def refresh_cookie_cache(cfg, interactive=True):
         )
         low = out.lower()
         locked = any(m in low for m in COOKIE_LOCK_MARKERS)
-        if not locked and cookie_cache_valid():
+        abe = IS_WIN and b in CHROMIUM_BROWSERS and any(m in low for m in COOKIE_ABE_MARKERS)
+        if not locked and not abe and cookie_cache_valid():
             log(f"Login cookies cached: {COOKIES_FILE.name} (source: {b})", "OK")
             return True
+
+        # Chrome App-Bound Encryption: normal extraction can't decrypt. Use the
+        # DevTools workaround — Chrome decrypts its own cookies for us.
+        if abe or (locked and b in CHROMIUM_BROWSERS and IS_WIN):
+            log(f"{b.title()} uses App-Bound Encryption — switching to the DevTools method...", "WARN")
+            try:
+                COOKIES_FILE.unlink(missing_ok=True)
+            except Exception:
+                pass
+            if export_chrome_cookies_cdp(b, cfg) and cookie_cache_valid():
+                return True
+
         if locked:
             log(f"{b.title()} is locking its cookie database — cookies can't be read while it runs.", "WARN")
             if interactive and attempt == 1:
@@ -858,7 +1136,7 @@ def choose_cookie_browser(cfg):
     """Menu: pick which browser to borrow login cookies from."""
     found = detect_installed_browsers()
     items = [(b, f"{b.title():<8}{' (installed)' if b in found else ''}") for b in BROWSER_ORDER]
-    items.append(("auto", "Auto-detect (prefer Firefox)"))
+    items.append(("auto", "Auto-detect"))
     items.append(("none", "Disable login cookies"))
     picked = pick_from_list("Login Cookie Browser", items, cfg.get("cookies_browser", "auto"))
     if picked:

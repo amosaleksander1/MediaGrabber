@@ -2,6 +2,23 @@
 
 All notable changes to MediaGrabber.
 
+## [2.4.0] — 2026-08-12
+
+### Added
+- **Chrome cookie borrowing now works** (Chrome/Edge/Brave/Vivaldi/Opera on
+  Windows). Since Chrome v127, cookies use App-Bound Encryption that yt-dlp
+  and gallery-dl can't decrypt (yt-dlp#10927). MediaGrabber now works around
+  it by launching the real browser headless against a temporary copy of the
+  profile with the DevTools Protocol enabled, asking the browser to decrypt
+  its **own** cookies, and exporting them to `tools/cookies.txt`. No Chrome
+  security settings are changed. Triggered automatically when normal
+  extraction hits an App-Bound-Encryption / DPAPI error.
+- Minimal stdlib WebSocket client (no new dependencies) for the DevTools call.
+
+### Changed
+- Auto-detect no longer implies "prefer Firefox" for cookies — Chromium
+  browsers are now first-class for login borrowing.
+
 ## [2.3.0] — 2026-08-12
 
 ### Added
