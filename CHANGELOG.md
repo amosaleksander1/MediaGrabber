@@ -2,6 +2,15 @@
 
 All notable changes to MediaGrabber.
 
+## [2.3.0] — 2026-08-12
+
+### Added
+- **TikTok embed-page engine** — when both yt-dlp and gallery-dl fail on a
+  TikTok video (ongoing upstream breakage, yt-dlp#17403), the app now pulls
+  the signed `tiktokcdn.com` media URL from TikTok's official embed page and
+  downloads it directly with browser headers. Supports the Q-cancel and
+  progress display like the other engines.
+
 ## [2.2.1] — 2026-08-12
 
 ### Fixed

@@ -86,7 +86,7 @@ def _stop_hint():
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 
 APP_NAME = "MediaGrabber"
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.3.0"
 
 # Only check for tool updates this often (or when a tool is missing/broken)
 UPDATE_INTERVAL_DAYS = 14
@@ -1294,6 +1294,77 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
         return (True, len(new_files))
     return (False, len(new_files))
 
+def tiktok_video_id(url):
+    m = re.search(r"/video/(\d+)", url) or re.search(r"item_id=(\d+)", url)
+    return m.group(1) if m else None
+
+def download_tiktok_embed(url, out_dir, cfg, tag, base_name=None):
+    """Last-resort TikTok workaround (yt-dlp #17403): TikTok's official embed
+       page still hands out signed tiktokcdn.com media URLs — grab one and
+       download it directly with browser headers. Returns True on success."""
+    vid = tiktok_video_id(url)
+    if not vid:
+        return False
+    log(f"{tag} Trying TikTok embed-page workaround...", "WARN")
+    import html as _html
+
+    try:
+        req = Request(f"https://www.tiktok.com/embed/v2/{vid}",
+                      headers={"User-Agent": BROWSER_UA,
+                               "Referer": "https://www.tiktok.com/"})
+        page = urlopen(req, timeout=30).read().decode("utf-8", "replace")
+    except Exception as e:
+        log(f"  Embed page fetch failed: {e}", "ERROR")
+        return False
+
+    cands = [_html.unescape(c) for c in re.findall(r'https:[^"\']*tiktokcdn[^"\']*', page)]
+    # video streams live under /video/ paths; 'tplv' URLs are thumbnails/avatars
+    vurls = [c for c in cands if "/video/" in c and "tplv" not in c]
+    if not vurls:
+        log("  No video URL found in embed page (photo post or region block)", "ERROR")
+        return False
+
+    name = base_name or f"tiktok_{vid}"
+    target = _unique_path(Path(out_dir), f"{name}.mp4")
+    try:
+        req = Request(vurls[0], headers={"User-Agent": BROWSER_UA,
+                                         "Referer": "https://www.tiktok.com/"})
+        with urlopen(req, timeout=180) as resp, open(target, "wb") as f:
+            total_b = int(resp.headers.get("Content-Length", 0))
+            done = 0
+            while True:
+                if _stop_requested():
+                    raise DownloadStopped()
+                chunk = resp.read(1024 * 256)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if total_b:
+                    print(f"\r  {C.DIM}{done/1048576:.1f}/{total_b/1048576:.1f} MB{C.RESET}   {C.YELLOW}[Press Q to cancel]{C.RESET}",
+                          end="", flush=True)
+        print()
+        if total_b and done < total_b:
+            raise OSError(f"incomplete ({done}/{total_b} bytes)")
+    except DownloadStopped:
+        print()
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+    except Exception as e:
+        print()
+        log(f"  Direct download failed: {e}", "ERROR")
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return False
+
+    log(f"  Saved: {target.name}", "OK")
+    return True
+
 def download_single(url, cfg, index, total, resolution_override=None):
     """Download a single URL with smart retry. Returns (url, success, message)."""
     tag = f"[{index}/{total}]"
@@ -1420,6 +1491,11 @@ def download_single(url, cfg, index, total, resolution_override=None):
                 if ok:
                     log(f"{tag} Completed via gallery-dl: {url}", "OK")
                     return (url, True, "OK (gallery-dl)")
+                # Final TikTok fallback: official embed page (yt-dlp #17403)
+                if re.search(r"tiktok\.com", url, re.IGNORECASE):
+                    if download_tiktok_embed(url, out_dir, cfg, tag, base_name=base_name):
+                        log(f"{tag} Completed via embed workaround: {url}", "OK")
+                        return (url, True, "OK (embed workaround)")
 
             err = "\n".join(output_lines[-5:])
             log(f"{tag} Failed after {max_attempts} attempts: {url}", "ERROR")
