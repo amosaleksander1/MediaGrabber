@@ -2,6 +2,18 @@
 
 All notable changes to MediaGrabber.
 
+## [2.4.1] — 2026-08-12
+
+### Fixed
+- **Chrome cookie export returning zero cookies / permission-denied.** The
+  v2.4.0 approach copied the profile to a temp dir, which broke App-Bound
+  Encryption key unwrapping (0 cookies) and tripped over the locked cookie DB
+  while Chrome ran. Now points headless Chrome at the **real** profile
+  directory (which is required for ABE keys to unwrap), detects when the
+  browser is still running and prompts to close it once, and adds a
+  `Storage.getCookies` fallback for Chrome builds where `Network.getAllCookies`
+  returns nothing.
+
 ## [2.4.0] — 2026-08-12
 
 ### Added

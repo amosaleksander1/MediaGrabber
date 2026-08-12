@@ -87,7 +87,7 @@ def _stop_hint():
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 
 APP_NAME = "MediaGrabber"
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.4.1"
 
 # Only check for tool updates this often (or when a tool is missing/broken)
 UPDATE_INTERVAL_DAYS = 14
@@ -973,11 +973,31 @@ def _cdp_cookies_to_netscape(cookies, path):
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return n
 
+def _cdp_call(ws, req_id, method, params=None):
+    """Send one CDP request and return its result dict (or {})."""
+    import json as _json
+    msg = {"id": req_id, "method": method}
+    if params:
+        msg["params"] = params
+    ws.send(_json.dumps(msg))
+    for _ in range(40):
+        r = _json.loads(ws.recv())
+        if r.get("id") == req_id:
+            return r.get("result", {}) or {}
+    return {}
+
+# Sentinel: the browser is still running, so we can't open a debugging session
+CHROME_RUNNING = "browser_running"
+
 def export_chrome_cookies_cdp(browser, cfg, domains=("instagram.com", "tiktok.com")):
     """Export decrypted cookies from a Chromium browser via the DevTools
-       Protocol into COOKIES_FILE. Returns True on success. Works around
-       App-Bound Encryption because Chrome decrypts its own cookies."""
-    import socket as _socket, shutil as _shutil, tempfile, json as _json
+       Protocol into COOKIES_FILE. Returns True on success, the string
+       CHROME_RUNNING if the browser must be closed first, or False.
+
+       We point headless Chrome at the REAL profile directory (browser closed)
+       so App-Bound Encryption keys unwrap correctly — copying the profile to a
+       new path breaks ABE key unwrapping and yields zero cookies."""
+    import socket as _socket, tempfile, json as _json
     from urllib.request import urlopen as _urlopen
 
     exe = find_chromium_binary(browser)
@@ -991,20 +1011,11 @@ def export_chrome_cookies_cdp(browser, cfg, domains=("instagram.com", "tiktok.co
         return False
 
     profile = cfg.get("chrome_profile", "Default")
-    src = Path(user_data)
-    tmp = Path(tempfile.mkdtemp(prefix="mg_cookies_"))
+    # Dedicated remote-debugging profile dir keeps our session out of the way,
+    # but the cookies come from the real --user-data-dir below.
+    dbg_dir = Path(tempfile.gettempdir()) / "mg_cdp_profile"
     proc = None
     try:
-        # Copy just enough of the profile: the ABE key (Local State) + cookies DB
-        shutil.copyfile(src / "Local State", tmp / "Local State")
-        dst_prof = tmp / profile / "Network"
-        dst_prof.mkdir(parents=True, exist_ok=True)
-        for rel in (Path(profile) / "Network" / "Cookies", Path(profile) / "Cookies"):
-            if (src / rel).exists():
-                shutil.copyfile(src / rel, tmp / profile / "Network" / "Cookies")
-                break
-
-        # Free port
         s = _socket.socket()
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
@@ -1012,18 +1023,22 @@ def export_chrome_cookies_cdp(browser, cfg, domains=("instagram.com", "tiktok.co
 
         log(f"Asking {browser.title()} to decrypt its own cookies (DevTools)...", "UPDATE")
         proc = subprocess.Popen(
-            [exe, f"--user-data-dir={tmp}", f"--profile-directory={profile}",
+            [exe, f"--user-data-dir={user_data}", f"--profile-directory={profile}",
              "--headless=new", f"--remote-debugging-port={port}",
              "--remote-allow-origins=*", "--no-first-run",
              "--no-default-browser-check", "--disable-gpu",
-             "--disable-extensions", "--disable-sync", "about:blank"],
+             "--disable-extensions", "--disable-sync", "--mute-audio",
+             "--window-position=-32000,-32000", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=NO_WINDOW,
         )
 
-        # Wait for the DevTools endpoint
+        # Wait for the DevTools endpoint. If it never comes up, the browser is
+        # almost certainly already running (singleton lock ignores our port).
         ws_url = None
-        for _ in range(40):  # ~20s
+        for _ in range(30):  # ~15s
+            if proc.poll() is not None:
+                break
             try:
                 with _urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as r:
                     ws_url = _json.loads(r.read().decode()).get("webSocketDebuggerUrl")
@@ -1032,23 +1047,20 @@ def export_chrome_cookies_cdp(browser, cfg, domains=("instagram.com", "tiktok.co
             except Exception:
                 time.sleep(0.5)
         if not ws_url:
-            log("DevTools endpoint did not come up.", "ERROR")
-            return False
+            log(f"{browser.title()} is still running — DevTools session couldn't start.", "WARN")
+            return CHROME_RUNNING
 
-        ws = _MiniWS(ws_url, timeout=20)
+        ws = _MiniWS(ws_url, timeout=25)
         try:
-            ws.send(_json.dumps({"id": 1, "method": "Network.getAllCookies"}))
-            cookies = []
-            for _ in range(20):
-                msg = _json.loads(ws.recv())
-                if msg.get("id") == 1:
-                    cookies = msg.get("result", {}).get("cookies", [])
-                    break
+            cookies = _cdp_call(ws, 1, "Network.getAllCookies").get("cookies", [])
+            if not cookies:
+                # Fallback path used by some Chrome builds
+                cookies = _cdp_call(ws, 2, "Storage.getCookies").get("cookies", [])
         finally:
             ws.close()
 
         if not cookies:
-            log("No cookies returned by DevTools.", "WARN")
+            log("No cookies returned by DevTools (is this the profile you're logged in on?)", "WARN")
             return False
 
         # Keep only cookies relevant to the sites we log into (smaller, safer file)
@@ -1072,10 +1084,6 @@ def export_chrome_cookies_cdp(browser, cfg, domains=("instagram.com", "tiktok.co
                     proc.kill()
                 except Exception:
                     pass
-        try:
-            _shutil.rmtree(tmp, ignore_errors=True)
-        except Exception:
-            pass
 
 def refresh_cookie_cache(cfg, interactive=True):
     """Export browser login cookies to tools/cookies.txt so downloads keep
@@ -1088,6 +1096,32 @@ def refresh_cookie_cache(cfg, interactive=True):
             log("Zen Browser profile with cookies not found — is Zen installed and used?", "ERROR")
         return cookie_cache_valid()
 
+    # ── Chromium on Windows: App-Bound Encryption blocks normal extraction.
+    #    Go straight to the DevTools method (browser decrypts its own cookies).
+    if IS_WIN and b in CHROMIUM_BROWSERS:
+        for attempt in (1, 2):
+            try:
+                COOKIES_FILE.unlink(missing_ok=True)
+            except Exception:
+                pass
+            result = export_chrome_cookies_cdp(b, cfg)
+            if result is True and cookie_cache_valid():
+                return True
+            if result == CHROME_RUNNING and interactive and attempt == 1:
+                try:
+                    input(f"  Close {b.title()} COMPLETELY (window + tray icon), then press Enter... ")
+                    continue
+                except EOFError:
+                    pass
+            break
+        if cookie_cache_valid():
+            log("Using previously cached login cookies (may be stale).", "WARN")
+            return True
+        log(f"Could not export cookies from {b.title()}. Tip: log in with Firefox/Zen "
+            "and select it via menu [11] for the smoothest experience.", "ERROR")
+        return False
+
+    # ── Firefox-family (Zen/Firefox) and non-Windows: yt-dlp reads directly ──
     for attempt in (1, 2):
         log(f"Exporting login cookies from {b}...", "UPDATE")
         rc, out = _run_quiet(
@@ -1100,22 +1134,9 @@ def refresh_cookie_cache(cfg, interactive=True):
         )
         low = out.lower()
         locked = any(m in low for m in COOKIE_LOCK_MARKERS)
-        abe = IS_WIN and b in CHROMIUM_BROWSERS and any(m in low for m in COOKIE_ABE_MARKERS)
-        if not locked and not abe and cookie_cache_valid():
+        if not locked and cookie_cache_valid():
             log(f"Login cookies cached: {COOKIES_FILE.name} (source: {b})", "OK")
             return True
-
-        # Chrome App-Bound Encryption: normal extraction can't decrypt. Use the
-        # DevTools workaround — Chrome decrypts its own cookies for us.
-        if abe or (locked and b in CHROMIUM_BROWSERS and IS_WIN):
-            log(f"{b.title()} uses App-Bound Encryption — switching to the DevTools method...", "WARN")
-            try:
-                COOKIES_FILE.unlink(missing_ok=True)
-            except Exception:
-                pass
-            if export_chrome_cookies_cdp(b, cfg) and cookie_cache_valid():
-                return True
-
         if locked:
             log(f"{b.title()} is locking its cookie database — cookies can't be read while it runs.", "WARN")
             if interactive and attempt == 1:
