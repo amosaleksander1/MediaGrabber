@@ -27,6 +27,14 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Runs in CI (UTF-8) but also by hand on a maintainer's machine — a Windows
+# console defaults to cp1252 and would crash on the box-drawing output.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):  # pragma: no cover — exotic stream
+        pass
+
 REPO = Path(__file__).resolve().parent.parent
 STATE_FILE = REPO / ".github" / "upstream-versions.json"
 

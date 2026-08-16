@@ -183,6 +183,18 @@ def enable_ansi():
     if IS_WIN:
         os.system("")  # noqa: S605 — documented cmd.exe VT-enable trick
 
+    # The menu and progress bars are drawn with box-drawing characters. A real
+    # console handles them, but a *redirected* stdout on Windows falls back to
+    # the ANSI code page (cp1252) and every print would raise
+    # UnicodeEncodeError — so `MediaGrabber.exe > log.txt` used to die on the
+    # banner. Ask for UTF-8 and degrade to '?' rather than crashing.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if (stream.encoding or "").lower().replace("-", "") != "utf8":
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
 
 # ── APP LOCATION ─────────────────────────────────────────────────────────────
 

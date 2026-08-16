@@ -45,10 +45,10 @@ jobs:
           - os: windows-latest
             target: windows-x64
             binary: MediaGrabber.exe
-          - os: macos-14          # Apple Silicon runner
+          - os: macos-15          # Apple Silicon runner (macos-14 is deprecated)
             target: macos-arm64
             binary: MediaGrabber
-          - os: macos-13          # Intel runner
+          - os: macos-15-intel    # Intel runner (macos-13 was retired)
             target: macos-x64
             binary: MediaGrabber
           - os: ubuntu-22.04      # older glibc = wider compatibility
@@ -58,6 +58,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # On a tag push this is the tag; on a manual run it is the tag typed
+          # into the dispatch form, so the build matches what gets released.
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - uses: actions/setup-python@v5
         with:
@@ -117,6 +121,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
           fetch-depth: 0   # full history so the changelog can be generated
 
       - uses: actions/download-artifact@v4
@@ -127,7 +132,7 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
-          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
 
           {
@@ -165,8 +170,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || github.event.inputs.tag }}
-          name: MediaGrabber ${{ github.ref_name || github.event.inputs.tag }}
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: MediaGrabber ${{ github.event.inputs.tag || github.ref_name }}
           body_path: RELEASE_NOTES.md
           files: artifacts/*.zip
           draft: false

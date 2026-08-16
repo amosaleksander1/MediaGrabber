@@ -30,7 +30,7 @@ if errorlevel 1 (
 :: Build
 echo.
 echo Compiling MediaGrabber.exe...
-python -m PyInstaller --onefile --console --name MediaGrabber --clean --distpath "%APPDIR%" "%APPDIR%\mediagrabber.py"
+python -m PyInstaller --onefile --console --name MediaGrabber --clean --noconfirm --collect-submodules mediagrabber --distpath "%APPDIR%" "%APPDIR%\mediagrabber.py"
 if errorlevel 1 (
     echo ERROR: Build failed.
     pause

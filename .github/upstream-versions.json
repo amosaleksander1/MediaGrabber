@@ -1,10 +1,10 @@
 {
-  "checked_at": "pending",
+  "checked_at": "2026-08-16",
   "upstream": {
-    "yt-dlp": "pending",
-    "gallery-dl": "pending",
-    "deno": "pending",
-    "ffmpeg-btbn": "pending",
+    "yt-dlp": "2026.07.04",
+    "gallery-dl": "2026.08.16",
+    "deno": "v2.9.5",
+    "ffmpeg-btbn": "latest",
     "ffmpeg-macos-arm64": "1785863997_9.0",
     "ffmpeg-macos-x64": "1785871427_9.0"
   }

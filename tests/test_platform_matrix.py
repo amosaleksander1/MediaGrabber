@@ -16,6 +16,14 @@ import os
 import subprocess
 import sys
 
+# This test prints box-drawing characters and is meant to run from any host OS,
+# including a Windows console whose default encoding is cp1252.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):  # pragma: no cover — exotic stream
+        pass
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CHILD = r'''
@@ -136,9 +144,13 @@ def main():
 
         # macOS-specific invariants.
         if plat == "darwin":
+            # The child builds paths with the *host's* pathlib flavour, so on a
+            # Windows host the separators come back as backslashes. Compare on
+            # a normalised form — the path shape is what matters here.
+            profile = got["chrome_profile"].replace("\\", "/")
             if "safari" not in got["browsers"]:
                 failures.append(f"{name}: Safari missing from browser list")
-            if "Library/Application Support" not in got["chrome_profile"]:
+            if "Library/Application Support" not in profile:
                 failures.append(f"{name}: Chrome profile path is not a macOS path")
             slug = "arm64" if mach == "arm64" else "amd64"
             if f"/macos/{slug}/" not in got["ffmpeg_macos"][0]:
