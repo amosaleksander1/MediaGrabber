@@ -1,0 +1,96 @@
+name: Upstream check
+
+# MediaGrabber downloads its tools (yt-dlp, ffmpeg, Deno, gallery-dl) from
+# third-party release feeds at runtime. This job verifies weekly that every
+# URL the app would build still resolves on every supported platform, and
+# records the current upstream versions.
+#
+#   • versions moved      -> opens a pull request with the updated snapshot
+#   • an asset disappeared -> opens an issue, because that breaks users
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check upstream assets
+        id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/check_upstream.py | tee check.log
+        continue-on-error: true
+
+      - name: Verify the platform matrix still resolves correctly
+        run: python tests/test_platform_matrix.py
+
+      - name: Open a pull request when upstream versions moved
+        if: steps.check.outcome == 'success'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/upstream-versions
+          title: "chore: upstream tool versions moved"
+          commit-message: "chore: refresh upstream tool version snapshot"
+          delete-branch: true
+          add-paths: .github/upstream-versions.json
+          body: |
+            Automated weekly upstream check.
+
+            One or more of yt-dlp / ffmpeg / Deno / gallery-dl published a new
+            release. Every download URL still resolves on all five supported
+            platform targets, so no code change is required — this PR just
+            refreshes the recorded snapshot.
+
+            Worth a smoke test before the next release if yt-dlp or gallery-dl
+            moved, since those two track site changes.
+
+      - name: Open an issue when an upstream asset disappeared
+        if: steps.check.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const log = fs.readFileSync('check.log', 'utf8');
+            const title = 'Upstream asset missing — downloads will break';
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'upstream',
+            });
+            const body = [
+              'The weekly upstream check could not resolve one or more download URLs.',
+              'Users on the affected platform(s) will fail to install that tool.',
+              '',
+              '```',
+              log.slice(-6000),
+              '```',
+            ].join('\n');
+            if (existing.data.some(i => i.title === title)) {
+              const issue = existing.data.find(i => i.title === title);
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: issue.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['upstream'],
+              });
+            }
+
+      - name: Fail the run if assets are missing
+        if: steps.check.outcome == 'failure'
+        run: exit 1

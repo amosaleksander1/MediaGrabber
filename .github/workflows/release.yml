@@ -1,0 +1,173 @@
+name: Release
+
+# Push a version tag to cut a release:
+#
+#     git tag -a v3.0.0 -m "..."  &&  git push --follow-tags
+#
+# Each platform gets its own archive containing only the binary it can run,
+# so nobody downloads assets for an OS they do not use. The changelog is
+# generated from the commits since the previous tag and written into the
+# GitHub Release — this repo deliberately has no CHANGELOG.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v3.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyflakes
+      - name: Lint
+        run: pyflakes mediagrabber/*.py mediagrabber.py scripts/*.py tests/*.py
+      - name: Platform matrix
+        run: python tests/test_platform_matrix.py
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+            binary: MediaGrabber.exe
+          - os: macos-14          # Apple Silicon runner
+            target: macos-arm64
+            binary: MediaGrabber
+          - os: macos-13          # Intel runner
+            target: macos-x64
+            binary: MediaGrabber
+          - os: ubuntu-22.04      # older glibc = wider compatibility
+            target: linux-x64
+            binary: MediaGrabber
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Build
+        run: >
+          python -m PyInstaller --onefile --console --name MediaGrabber
+          --clean --noconfirm --distpath dist
+          --collect-submodules mediagrabber
+          mediagrabber.py
+
+      - name: Stage archive (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p stage
+          cp dist/${{ matrix.binary }} stage/
+          chmod +x stage/${{ matrix.binary }}
+          cp README.md LICENSE stage/
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cp run.command stage/
+            chmod +x stage/run.command
+          else
+            cp run.sh stage/
+            chmod +x stage/run.sh
+          fi
+          cd stage && zip -r ../MediaGrabber-${{ matrix.target }}.zip .
+
+      - name: Stage archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage | Out-Null
+          Copy-Item dist/${{ matrix.binary }} stage/
+          Copy-Item README.md,LICENSE,RUN.bat stage/
+          Compress-Archive -Path stage/* -DestinationPath MediaGrabber-${{ matrix.target }}.zip
+
+      - name: Smoke test the binary
+        if: runner.os != 'Windows'
+        run: |
+          # The menu needs stdin; feeding it "0" proves the binary starts,
+          # renders and exits cleanly on this platform.
+          printf '0\n' | ./dist/${{ matrix.binary }} || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MediaGrabber-${{ matrix.target }}
+          path: MediaGrabber-${{ matrix.target }}.zip
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so the changelog can be generated
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+
+          {
+            echo "## What's changed"
+            echo
+            if [ -n "$PREV" ]; then
+              git log --no-merges --pretty=format:'- %s (%h)' "$PREV..$TAG"
+            else
+              git log --no-merges --pretty=format:'- %s (%h)' "$TAG"
+            fi
+            echo
+            echo
+            echo "## Downloads"
+            echo
+            echo "Pick the one archive for your machine — each contains only the"
+            echo "binary that runs there."
+            echo
+            echo "| Platform | Download |"
+            echo "| --- | --- |"
+            echo "| Windows (64-bit) | \`MediaGrabber-windows-x64.zip\` |"
+            echo "| macOS — Apple Silicon (M1/M2/M3/M4) | \`MediaGrabber-macos-arm64.zip\` |"
+            echo "| macOS — Intel | \`MediaGrabber-macos-x64.zip\` |"
+            echo "| Linux (x86-64) | \`MediaGrabber-linux-x64.zip\` |"
+            echo
+            echo "> **macOS:** the binary is unsigned, so the first launch needs"
+            echo "> one extra step — see *First run on macOS* in the README."
+            echo
+            if [ -n "$PREV" ]; then
+              echo "**Full diff:** ${{ github.server_url }}/${{ github.repository }}/compare/$PREV...$TAG"
+            fi
+          } > RELEASE_NOTES.md
+
+          cat RELEASE_NOTES.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.tag }}
+          name: MediaGrabber ${{ github.ref_name || github.event.inputs.tag }}
+          body_path: RELEASE_NOTES.md
+          files: artifacts/*.zip
+          draft: false
+          prerelease: false

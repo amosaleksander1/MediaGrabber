@@ -18,4 +18,16 @@ build/
 *.spec
 __pycache__/
 *.pyc
+*.pyo
 *.exe
+
+# Frozen binaries produced by BUILD.sh / BUILD.bat
+/MediaGrabber
+/MediaGrabber.exe
+
+# Release staging
+release/
+*.zip
+
+# macOS cruft
+.DS_Store
