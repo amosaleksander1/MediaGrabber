@@ -2,12 +2,13 @@
 
 Portable, menu-driven media downloader for **Windows, macOS and Linux**. Paste links, pick a format, done.
 
-Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://github.com/mikf/gallery-dl), with automatic tool updates, Instagram/TikTok carousel support, and browser-based login.
+Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://github.com/mikf/gallery-dl), with automatic tool updates, whole-post image and video downloads, and browser-based login.
 
 ## Features
 
 - **Batch or single downloads** — queue links in `urls.txt` or paste one at a time
-- **Video & audio modes** — MP4/MKV/WebM/… video, MP3/FLAC/Opus/… audio, resolution capping
+- **Video, audio & media modes** — MP4/MKV/WebM/… video, MP3/FLAC/Opus/… audio, resolution capping, or **Media mode**: pull *every* image and video out of a post
+- **Images, not just video** — posts on Instagram, TikTok, X/Twitter, Reddit, Pinterest and Threads are recognised, named from their caption, and downloaded whole. Image-only posts that yt-dlp cannot touch are picked up by gallery-dl automatically, on any site it supports
 - **Instagram & TikTok carousels** — detects real multi-item posts and downloads *all* slides (images **and** videos) into a subfolder named from the post caption (e.g. `pink ketemu butter yellow/`), with files named to match (`pink ketemu butter yellow - 01.jpg`). Single reels/posts download normally — no folder.
 - **Baked-in login** — borrows your existing browser session (no password stored), with a one-time cookie export so downloads work while the browser is open
 - **Self-maintaining** — yt-dlp, ffmpeg, Deno and gallery-dl are auto-downloaded for *your* platform and architecture; update checks run at most every 14 days (or when a tool breaks), so startup is instant
@@ -168,7 +169,8 @@ Both use PyInstaller. A macOS build is native to whichever architecture you buil
 ```
 [1]  Download from urls.txt        [7]  Force update tools now
 [2]  Download single URL           [8]  Open output folder
-[3]  Change format (Video/Audio)   [9]  Open urls.txt for editing
+[3]  Change format (Video/Audio/   [9]  Open urls.txt for editing
+     Media)
 [4]  Change resolution             [10] Checkup (tools + login)
 [5]  Change output folder          [11] Set login cookie browser
 [6]  Toggle auto-update            [12] Delete saved login cookies
@@ -185,15 +187,40 @@ Instagram rejects anonymous downloads, and scripted username/password logins get
 
 > ⚠️ `tools/cookies.txt` **is your live Instagram session**. Anyone with that file can act as your account. It is `.gitignore`d — never commit or share it. Use menu `[12]` to delete it at any time (it re-exports automatically when next needed).
 
-## Carousel downloads
+## Pulling images and media out of a post
 
-Any Instagram post/reel (`instagram.com/p/…`, `/reel/…`) or TikTok photo post (`tiktok.com/@user/photo/…`, `vt.tiktok.com/…`) is probed first (metadata only):
+### Media mode
+
+Menu `[3]` → `[3]` switches to **Media** mode, which treats a link as a *post* rather than a video: gallery-dl pulls every item it holds — images, videos, or a mix — instead of yt-dlp looking for a single video stream. Use it for image posts, photo carousels and mixed albums. Resolution settings do not apply (an image has no bitrate); switch back to Video mode for resolution capping.
+
+In Video and Audio mode nothing changes, with one addition: when yt-dlp exhausts its retries on a link, gallery-dl is asked whether it can pull media from that post anyway. That is what rescues an image-only post you paste without switching modes. On a site gallery-dl has no extractor for, the attempt simply misses and the original error stands.
+
+### Recognised post links
+
+These are probed for their item count and named from their caption:
+
+| Platform | Link shape |
+| --- | --- |
+| Instagram | `instagram.com/p/…`, `/reel/…`, `/tv/…` |
+| TikTok | `tiktok.com/@user/photo/…`, `/video/…`, `vt.tiktok.com/…` |
+| X / Twitter | `x.com/user/status/…`, `twitter.com/user/status/…` |
+| Reddit | `reddit.com/r/sub/comments/…`, `redd.it/…` |
+| Pinterest | `pinterest.*/pin/…`, `pin.it/…` |
+| Threads | `threads.net/@user/post/…` |
+
+Only *post-shaped* links match — a profile, board or subreddit root is deliberately not treated as a post, so one link can never turn into a mass download. A post with no readable caption falls back to a name derived from the link (`reddit_pics_1abc2d`, `twitter_nasa_1889…`).
+
+### What happens to a post link
+
+Any recognised post is probed first (metadata only):
 
 1. **Single item** → downloaded normally into the output folder, standard naming. If yt-dlp cannot handle it (e.g. a single image post), gallery-dl takes over.
 2. **2+ items (real carousel)** → a subfolder is created, named from the first caption words (default 4 — `folder_name_words` in `config.json`; emojis, hashtags, mentions and links stripped; no caption → `instagram_<shortcode>`). **gallery-dl** downloads every slide — images and videos — into it, named `<folder name> - 01.jpg`, `- 02.mp4`, … instead of numeric media IDs.
 3. If gallery-dl fails, the app falls back to yt-dlp targeting the same folder.
 
-Regular links (YouTube etc.) are unaffected and go straight into the output folder.
+Regular links (YouTube etc.) are unaffected and go straight into the output folder, keeping `--recode-video` and your resolution setting.
+
+> Probing costs one metadata request per post link, so a large `urls.txt` of post URLs starts a little slower than a list of plain video links.
 
 ## Configuration (`config.json`)
 
@@ -234,7 +261,7 @@ mediagrabber/
   config.py                paths, defaults, format lists
   tools.py                 per-platform tool sources + auto-update
   cookies.py               browser login, per-OS cookie decryption
-  probe.py                 carousel detection and naming
+  probe.py                 post detection, item count and naming
   download.py              the download engine
   checkup.py               health check
   app.py                   menu loop

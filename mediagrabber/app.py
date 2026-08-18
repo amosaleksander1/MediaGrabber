@@ -43,8 +43,11 @@ def clear_urls():
 # ── SETTINGS SCREENS ─────────────────────────────────────────────────────────
 
 def format_status(cfg):
-    if cfg.get("mode", "video") == "audio":
+    mode = cfg.get("mode", "video")
+    if mode == "audio":
         return f"AUDIO ({cfg.get('audio_format', 'mp3').upper()})"
+    if mode == "media":
+        return "MEDIA (images + video, whole post)"
     res = cfg.get("resolution", "best")
     res_label = res if res in ("best", "worst") else f"{res}p"
     return f"VIDEO ({cfg.get('video_format', 'mp4').upper()} @ {res_label})"
@@ -60,7 +63,7 @@ def show_menu(cfg):
 ├──────────────────────────────────────────────┤
 │  {C.GREEN}[1]{C.RESET}{C.BOLD}  Download from urls.txt                  │
 │  {C.GREEN}[2]{C.RESET}{C.BOLD}  Download single URL                     │
-│  {C.GREEN}[3]{C.RESET}{C.BOLD}  Change format (Video / Audio)           │
+│  {C.GREEN}[3]{C.RESET}{C.BOLD}  Change format (Video / Audio / Media)   │
 │  {C.GREEN}[4]{C.RESET}{C.BOLD}  Change resolution (Video only)          │
 │  {C.GREEN}[5]{C.RESET}{C.BOLD}  Change output folder                    │
 │  {C.GREEN}[6]{C.RESET}{C.BOLD}  Toggle auto-update                      │
@@ -79,6 +82,7 @@ def choose_format(cfg):
     print(f"\n  {C.BOLD}{C.CYAN}Choose Mode & Format{C.RESET}")
     print(f"  {C.GREEN}[1]{C.RESET} Video formats")
     print(f"  {C.GREEN}[2]{C.RESET} Audio formats")
+    print(f"  {C.GREEN}[3]{C.RESET} Media — every image and video in a post")
     print(f"  {C.DIM}[0] Cancel{C.RESET}\n")
     choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
 
@@ -94,10 +98,16 @@ def choose_format(cfg):
             cfg["mode"], cfg["audio_format"] = "audio", picked
             save_config(cfg)
             log(f"Format set to AUDIO ({picked.upper()})", "OK")
+    elif choice == "3":
+        cfg["mode"] = "media"
+        save_config(cfg)
+        log("Format set to MEDIA — pulls every image and video in a post", "OK")
+        log("Instagram, TikTok, X/Twitter, Reddit, Pinterest and Threads posts "
+            "are named from their caption; other sites are attempted too.", "INFO")
 
 
 def choose_resolution(cfg):
-    if cfg.get("mode") == "audio":
+    if cfg.get("mode") in ("audio", "media"):
         log("Resolution only applies to video mode. Switch to video first.", "WARN")
         return
     picked = pick_from_list("Default Video Resolution", RESOLUTION_OPTIONS,

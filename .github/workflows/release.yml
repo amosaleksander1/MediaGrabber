@@ -35,6 +35,8 @@ jobs:
         run: pyflakes mediagrabber/*.py mediagrabber.py scripts/*.py tests/*.py
       - name: Platform matrix
         run: python tests/test_platform_matrix.py
+      - name: Media-mode URL handling
+        run: python tests/test_media_urls.py
 
   build:
     needs: test

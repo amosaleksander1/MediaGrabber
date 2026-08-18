@@ -1,5 +1,5 @@
-"""The download engine: yt-dlp first, gallery-dl for carousels and images,
-TikTok's embed page as the last resort."""
+"""The download engine: yt-dlp first, gallery-dl for carousels, images and
+media mode, TikTok's embed page as the last resort."""
 
 import html as _html
 import re
@@ -12,8 +12,8 @@ from .config import (BROWSER_UA, DENO_EXE, OUTPUT_DIR,
                      YTDLP_EXE)
 from .cookies import cookie_args
 from .platform_support import stop_requested
-from .probe import (is_carousel_candidate, needs_login, post_base_name,
-                    probe_post, tiktok_video_id)
+from .probe import (is_carousel_candidate, is_post_url, needs_login,
+                    post_base_name, probe_post, tiktok_video_id)
 from .shell import popen_stream, stop_process
 from .tools import (gallerydl_available, gallerydl_command, repair_gallerydl,
                     run_updates)
@@ -134,9 +134,9 @@ def build_ytdlp_args(url, cfg, resolution_override=None, out_dir_override=None):
     mode = cfg.get("mode", "video")
     if mode == "audio":
         args += ["-x", "--audio-format", cfg.get("audio_format", "mp3")]
-    elif carousel:
-        # Carousels mix images and videos — a strict video selector or
-        # --recode-video would fail on the image entries.
+    elif mode == "media" or carousel:
+        # Media mode and carousels both mix images with video — a strict video
+        # selector or --recode-video would fail on the image entries.
         args += ["-f", "best"]
     else:
         args += ["--recode-video", cfg.get("video_format", "mp4")]
@@ -155,8 +155,13 @@ def build_ytdlp_args(url, cfg, resolution_override=None, out_dir_override=None):
 
 # ── gallery-dl ───────────────────────────────────────────────────────────────
 
-def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
+def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False,
+                       rescue=False):
     """Download a post (images + videos) into target_dir via gallery-dl.
+
+    ``rescue`` marks a speculative attempt on a URL that yt-dlp already failed:
+    gallery-dl may have no extractor for the site at all, which is an expected
+    miss rather than a fault, so it is reported quietly.
 
     Returns (success, n_new_files).
     """
@@ -184,7 +189,8 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
     if cargs:
         args += cargs
     elif needs_login(url):
-        log(f"{tag} No login cookies — Instagram may reject this (menu [11] / [10])", "WARN")
+        log(f"{tag} No login cookies — this site may reject the request "
+            f"(menu [11] / [10])", "WARN")
 
     args.append(url)
     log(f"  Target: {target_dir}", "INFO")
@@ -203,7 +209,7 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
             collected.append(line)
             low = line.lower()
             if "error" in low:
-                log(f"  {line}", "ERROR")
+                log(f"  {line}", "INFO" if rescue else "ERROR")
             elif "warning" in low:
                 log(f"  {line}", "WARN")
             else:
@@ -216,7 +222,7 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False):
         if _looks_like_abi_failure(str(e)) and repair_gallerydl():
             log(f"{tag} Retrying with the repaired gallery-dl...", "WARN")
             return download_gallerydl(url, target_dir, cfg, tag, base_name, single)
-        log(f"{tag} gallery-dl crashed: {e}", "ERROR")
+        log(f"{tag} gallery-dl crashed: {e}", "INFO" if rescue else "ERROR")
         return (False, 0)
 
     new_files = [f for f in target_dir.iterdir()
@@ -309,29 +315,45 @@ def download_single(url, cfg, index, total, resolution_override=None):
     max_attempts = cfg.get("max_retries", 3)
     out_dir = cfg.get("output_dir", OUTPUT_DIR)
 
+    media_mode = cfg.get("mode", "video") == "media"
+
     # Self-heal: a missing tool triggers an immediate forced update.
-    if not YTDLP_EXE.exists() or (is_carousel_candidate(url) and not gallerydl_available()):
+    wants_gallerydl = media_mode or is_post_url(url)
+    if not YTDLP_EXE.exists() or (wants_gallerydl and not gallerydl_available()):
         log(f"{tag} Required tool missing — updating tools now...", "WARN")
         run_updates(cfg, force=True)
 
-    # IG/TikTok posts: probe first. Real carousels (2+ items) get their own
-    # caption-named subfolder; single posts download normally.
-    carousel = False
+    # Posts on a known platform are probed first, so the files are named from
+    # the caption and a multi-item post gets its own folder. Media mode takes
+    # the gallery-dl route for any URL, whatever the post turns out to hold.
+    multi = False
     base_name = None
-    if is_carousel_candidate(url):
+    if wants_gallerydl:
         log(f"{tag} Probing post metadata...", "INFO")
         count, caption = probe_post(url, cfg)
         base_name = post_base_name(url, caption, cfg)
         if count and count > 1:
-            carousel = True
+            multi = True
             sub_dir = Path(out_dir) / base_name
-            log(f"{tag} Carousel ({count} items) -> {base_name}", "OK")
+            log(f"{tag} Post holds {count} items -> {base_name}", "OK")
             ok, n = download_gallerydl(url, sub_dir, cfg, tag, base_name=base_name)
             if ok:
                 log(f"{tag} Completed: {n} file(s) -> {sub_dir.name}", "OK")
                 return (url, True, f"OK ({n} files in {sub_dir.name})")
             log(f"{tag} gallery-dl failed — falling back to yt-dlp", "WARN")
             out_dir = str(sub_dir)
+        elif media_mode:
+            # One item, but in media mode it is still gallery-dl's job: the
+            # item is often an image that yt-dlp cannot fetch at all.
+            # On a known post an error is worth showing; on any other link
+            # media mode is speculative, so a miss stays quiet.
+            ok, n = download_gallerydl(url, Path(out_dir), cfg, tag,
+                                       base_name=base_name, single=True,
+                                       rescue=not is_post_url(url))
+            if ok:
+                log(f"{tag} Completed: {n} file(s)", "OK")
+                return (url, True, f"OK ({n} file(s) via gallery-dl)")
+            log(f"{tag} gallery-dl got nothing — trying yt-dlp", "WARN")
         else:
             log(f"{tag} Single post — downloading normally", "INFO")
 
@@ -345,7 +367,7 @@ def download_single(url, cfg, index, total, resolution_override=None):
             log(f"{tag} Retry {attempt - 1}/{max_attempts - 1}...", "WARN")
 
         args = build_ytdlp_args(url, cfg, resolution_override,
-                                out_dir_override=out_dir if carousel else None)
+                                out_dir_override=out_dir if multi else None)
         try:
             process = popen_stream(args)
             output_lines = []
@@ -402,10 +424,15 @@ def download_single(url, cfg, index, total, resolution_override=None):
                 continue
 
             # Out of retries — try gallery-dl, then TikTok's embed page.
-            if needs_login(url) and not carousel:
-                log(f"{tag} yt-dlp failed — trying gallery-dl for this post", "WARN")
+            # This runs for any URL, not just the login sites: an image-only
+            # post is exactly the case yt-dlp cannot handle but gallery-dl can.
+            # On a site gallery-dl has no extractor for it simply misses, so
+            # the attempt is logged quietly.
+            if not multi:
+                log(f"{tag} yt-dlp failed — asking gallery-dl for this post", "INFO")
                 ok, _ = download_gallerydl(url, Path(out_dir), cfg, tag,
-                                           base_name=base_name, single=True)
+                                           base_name=base_name, single=True,
+                                           rescue=True)
                 if ok:
                     log(f"{tag} Completed via gallery-dl: {url}", "OK")
                     return (url, True, "OK (gallery-dl)")

@@ -130,6 +130,20 @@ def resolve_cookie_browser(cfg):
     return found[0] if found else None
 
 
+# Domains worth pulling out of a browser profile. Only sites that gate media
+# behind a login need a cookie: exporting everything would put unrelated
+# session cookies in a file on disk for no benefit.
+LOGIN_DOMAINS = (
+    "instagram.com",
+    "tiktok.com",
+    "x.com",
+    "twitter.com",
+    "threads.net",
+    "threads.com",
+    "reddit.com",
+)
+
+
 def cookie_cache_valid():
     return COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 0
 
@@ -332,7 +346,7 @@ def cdp_cookies_to_netscape(cookies, path):
     return n
 
 
-def export_chrome_cookies_cdp(browser, cfg, domains=("instagram.com", "tiktok.com")):
+def export_chrome_cookies_cdp(browser, cfg, domains=LOGIN_DOMAINS):
     """Export decrypted cookies from a Chromium browser via DevTools.
 
     Returns True, :data:`CHROME_RUNNING` if the browser must be closed first,

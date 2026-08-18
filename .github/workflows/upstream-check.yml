@@ -38,6 +38,9 @@ jobs:
       - name: Verify the platform matrix still resolves correctly
         run: python tests/test_platform_matrix.py
 
+      - name: Verify media-mode URL handling
+        run: python tests/test_media_urls.py
+
       - name: Open a pull request when upstream versions moved
         if: steps.check.outcome == 'success'
         uses: peter-evans/create-pull-request@v6
