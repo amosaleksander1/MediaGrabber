@@ -54,6 +54,19 @@ PERMANENT_ERRORS = [
 
 #: Errors that usually mean the downloader itself is outdated — these trigger
 #: a forced tool update plus one free retry.
+# yt-dlp reporting that the link holds no video at all. This is not a fault
+# and not a tool problem: it is the expected answer for an image post, and the
+# cue to hand the URL straight to gallery-dl instead of retrying. It has to be
+# tested before TOOL_FAILURE_MARKERS, whose "please report this issue" and
+# "confirm you are on the latest version" also appear in yt-dlp's boilerplate
+# for this error — which is what used to force a pointless tool update.
+NO_VIDEO_MARKERS = [
+    "no video formats found",
+    "no video could be found",
+    "there's no video",
+    "no media found",
+]
+
 TOOL_FAILURE_MARKERS = [
     "unable to extract",
     "js challenge",

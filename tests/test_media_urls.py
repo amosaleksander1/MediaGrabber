@@ -27,7 +27,9 @@ for _stream in (sys.stdout, sys.stderr):
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mediagrabber.config import DEFAULTS                       # noqa: E402
-from mediagrabber.download import build_ytdlp_args             # noqa: E402
+from mediagrabber.download import (build_ytdlp_args,           # noqa: E402
+                                   is_no_video, is_permanent_error,
+                                   is_tool_failure)
 from mediagrabber.probe import (is_carousel_candidate,         # noqa: E402
                                 is_post_url, needs_login,
                                 post_folder_name)
@@ -143,15 +145,47 @@ def check_args(fail):
         fail("audio mode: expected -x")
 
 
+# The real yt-dlp output for an Instagram image post. Its boilerplate contains
+# "please report this issue" and "confirm you are on the latest version", both
+# TOOL_FAILURE_MARKERS - so before NO_VIDEO_MARKERS existed this answer forced a
+# tool update and burned every retry on a post that simply has no video.
+IMAGE_POST_OUTPUT = [
+    "[Instagram] Extracting URL: https://www.instagram.com/p/DblkhUwAYDz/",
+    "[Instagram] DblkhUwAYDz: Downloading video info",
+    "ERROR: [Instagram] DblkhUwAYDz: No video formats found!; please report "
+    "this issue on  https://github.com/yt-dlp/yt-dlp/issues?q= , filling out "
+    "the appropriate issue template. Confirm you are on the latest version "
+    "using  yt-dlp -U",
+]
+
+REAL_TOOL_FAILURE = [
+    "ERROR: [TikTok] 123: Unable to extract webpage video data; please report "
+    "this issue on https://github.com/yt-dlp/yt-dlp/issues",
+]
+
+
+def check_error_classification(fail):
+    if not is_no_video(IMAGE_POST_OUTPUT):
+        fail("image post: 'No video formats found' must be read as no-video")
+    if is_permanent_error(IMAGE_POST_OUTPUT):
+        fail("image post: must not be classified permanent")
+    if not is_tool_failure(REAL_TOOL_FAILURE):
+        fail("genuine 'Unable to extract' must still be a tool failure")
+    if is_no_video(REAL_TOOL_FAILURE):
+        fail("'Unable to extract' must not be read as no-video")
+
+
 def main():
     failures = []
     fail = failures.append
 
     check_urls(fail)
     check_args(fail)
+    check_error_classification(fail)
 
-    print(f"Checked {len(POSTS)} post URLs, {len(NON_POSTS)} non-post URLs "
-          f"and the yt-dlp arguments for video / media / audio mode.")
+    print(f"Checked {len(POSTS)} post URLs, {len(NON_POSTS)} non-post URLs, "
+          f"the yt-dlp arguments for video / media / audio mode, and how "
+          f"yt-dlp's errors are classified.")
     print("=" * 60)
     if failures:
         print("FAILURES:")

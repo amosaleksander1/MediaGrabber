@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from .config import (BROWSER_UA, DENO_EXE, OUTPUT_DIR,
+from .config import (BROWSER_UA, DENO_EXE, NO_VIDEO_MARKERS, OUTPUT_DIR,
                      PERMANENT_ERRORS, TOOLS_DIR, TOOL_FAILURE_MARKERS,
                      YTDLP_EXE)
 from .cookies import cookie_args
@@ -88,6 +88,12 @@ def _cleanup_temp(out_dir):
 def is_permanent_error(output_lines):
     combined = " ".join(output_lines[-10:]).lower()
     return any(p.lower() in combined for p in PERMANENT_ERRORS)
+
+
+def is_no_video(output_lines):
+    """yt-dlp found no video here - an image post, not a fault to retry."""
+    text = "\n".join(output_lines).lower()
+    return any(m in text for m in NO_VIDEO_MARKERS)
 
 
 def is_tool_failure(output_lines):
@@ -196,6 +202,7 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False,
     log(f"  Target: {target_dir}", "INFO")
 
     collected = []
+    skipped = []
     try:
         process = popen_stream(args)
         for line in process.stdout:
@@ -207,6 +214,12 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False,
             if not line:
                 continue
             collected.append(line)
+            # gallery-dl prefixes a path with "# " when the file is already on
+            # disk and it skipped the download. That is a success — the media
+            # is present — but nothing new appears in the folder, so without
+            # this the run looks like a total miss.
+            if line.lstrip().startswith("#"):
+                skipped.append(line.lstrip()[1:].strip())
             low = line.lower()
             if "error" in low:
                 log(f"  {line}", "INFO" if rescue else "ERROR")
@@ -218,6 +231,16 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False,
     except DownloadStopped:
         raise
     except Exception as e:
+        # Whatever went wrong reading the stream, files already on disk are
+        # the truth. Losing a finished download to a logging hiccup would be
+        # the worst outcome here.
+        landed = [f for f in target_dir.iterdir()
+                  if f.is_file() and f.name not in before]
+        if landed:
+            log(f"{tag} Could not read gallery-dl output ({e}), but "
+                f"{len(landed)} file(s) arrived", "WARN")
+            return (True, len(landed))
+
         # A binary that will not exec raises here (OSError/FileNotFoundError).
         if _looks_like_abi_failure(str(e)) and repair_gallerydl():
             log(f"{tag} Retrying with the repaired gallery-dl...", "WARN")
@@ -229,6 +252,12 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False,
                  if f.is_file() and f.name not in before]
     if process.returncode == 0 and new_files:
         return (True, len(new_files))
+
+    if process.returncode == 0 and skipped:
+        names = ", ".join(Path(f).name for f in skipped[:3])
+        more = f" (+{len(skipped) - 3} more)" if len(skipped) > 3 else ""
+        log(f"{tag} Already downloaded: {names}{more}", "OK")
+        return (True, len(skipped))
 
     if not new_files and _looks_like_abi_failure("\n".join(collected[-5:])):
         if repair_gallerydl():
@@ -309,6 +338,39 @@ def _unlink(path):
 
 # ── ORCHESTRATION ────────────────────────────────────────────────────────────
 
+def _rescue(url, out_dir, cfg, tag, base_name, multi, gallerydl_tried,
+            output_lines, reason):
+    """Last resort after yt-dlp: gallery-dl, then TikTok's embed page.
+
+    Reached two ways: yt-dlp ran out of retries, or it reported that the link
+    holds no video at all. The second case is an image post — retrying that
+    three times and force-updating the tools only wastes the user's time, so it
+    comes straight here.
+
+    ``gallerydl_tried`` avoids asking gallery-dl twice about the same URL when
+    media mode already had a go at it.
+    """
+    if not multi:
+        if not gallerydl_tried:
+            log(f"{tag} Asking gallery-dl for this post...", "INFO")
+            ok, _ = download_gallerydl(url, Path(out_dir), cfg, tag,
+                                       base_name=base_name, single=True,
+                                       rescue=True)
+            if ok:
+                log(f"{tag} Completed via gallery-dl: {url}", "OK")
+                return (url, True, "OK (gallery-dl)")
+
+        if re.search(r"tiktok\.com", url, re.IGNORECASE):
+            if download_tiktok_embed(url, out_dir, cfg, tag, base_name=base_name):
+                log(f"{tag} Completed via embed workaround: {url}", "OK")
+                return (url, True, "OK (embed workaround)")
+
+    log(f"{tag} {reason}: {url}", "ERROR")
+    if output_lines:
+        log("  Last output: " + "\n".join(output_lines[-5:]), "ERROR")
+    return (url, False, reason)
+
+
 def download_single(url, cfg, index, total, resolution_override=None):
     """Download one URL with smart retry. Returns (url, success, message)."""
     tag = f"[{index}/{total}]"
@@ -326,6 +388,7 @@ def download_single(url, cfg, index, total, resolution_override=None):
     # Posts on a known platform are probed first, so the files are named from
     # the caption and a multi-item post gets its own folder. Media mode takes
     # the gallery-dl route for any URL, whatever the post turns out to hold.
+    gallerydl_tried = False
     multi = False
     base_name = None
     if wants_gallerydl:
@@ -350,6 +413,7 @@ def download_single(url, cfg, index, total, resolution_override=None):
             ok, n = download_gallerydl(url, Path(out_dir), cfg, tag,
                                        base_name=base_name, single=True,
                                        rescue=not is_post_url(url))
+            gallerydl_tried = True
             if ok:
                 log(f"{tag} Completed: {n} file(s)", "OK")
                 return (url, True, f"OK ({n} file(s) via gallery-dl)")
@@ -411,6 +475,15 @@ def download_single(url, cfg, index, total, resolution_override=None):
                 log("  " + "\n".join(output_lines[-3:]), "ERROR")
                 return (url, False, "Permanent error — video unavailable/private/blocked")
 
+            # No video at all: an image post. Retrying and force-updating
+            # the tools cannot conjure one, so hand it over immediately.
+            if is_no_video(output_lines):
+                log(f"{tag} yt-dlp found no video here - treating it as an "
+                    f"image post", "INFO")
+                return _rescue(url, out_dir, cfg, tag, base_name, multi,
+                               gallerydl_tried, output_lines,
+                               "No video in this post")
+
             # Outdated-tool error: force-update once and retry for free.
             if not updated_once and is_tool_failure(output_lines):
                 log(f"{tag} Failure looks tool-related — force-updating tools and retrying...", "WARN")
@@ -423,27 +496,9 @@ def download_single(url, cfg, index, total, resolution_override=None):
                 time.sleep(3 * attempt)
                 continue
 
-            # Out of retries — try gallery-dl, then TikTok's embed page.
-            # This runs for any URL, not just the login sites: an image-only
-            # post is exactly the case yt-dlp cannot handle but gallery-dl can.
-            # On a site gallery-dl has no extractor for it simply misses, so
-            # the attempt is logged quietly.
-            if not multi:
-                log(f"{tag} yt-dlp failed — asking gallery-dl for this post", "INFO")
-                ok, _ = download_gallerydl(url, Path(out_dir), cfg, tag,
-                                           base_name=base_name, single=True,
-                                           rescue=True)
-                if ok:
-                    log(f"{tag} Completed via gallery-dl: {url}", "OK")
-                    return (url, True, "OK (gallery-dl)")
-                if re.search(r"tiktok\.com", url, re.IGNORECASE):
-                    if download_tiktok_embed(url, out_dir, cfg, tag, base_name=base_name):
-                        log(f"{tag} Completed via embed workaround: {url}", "OK")
-                        return (url, True, "OK (embed workaround)")
-
-            log(f"{tag} Failed after {max_attempts} attempts: {url}", "ERROR")
-            log("  Last output: " + "\n".join(output_lines[-5:]), "ERROR")
-            return (url, False, f"Failed after {max_attempts} attempts")
+            return _rescue(url, out_dir, cfg, tag, base_name, multi,
+                           gallerydl_tried, output_lines,
+                           f"Failed after {max_attempts} attempts")
 
         except DownloadStopped:
             _cleanup_temp(out_dir)
