@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "MediaGrabber Bridge",
+  "version": "1.0.0",
+  "description": "Hands your existing browser session and the current post link to MediaGrabber running on this computer.",
+
+  "//browser_specific_settings": "Firefox identifies the extension by this ID, which is what nativehost.py writes into allowed_extensions. Chrome ignores this key and uses \"key\" in manifest.json instead.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "mediagrabber@amosaleksander",
+      "strict_min_version": "115.0"
+    }
+  },
+
+  "permissions": ["cookies", "activeTab", "contextMenus", "nativeMessaging"],
+
+  "host_permissions": [
+    "https://*.instagram.com/*",
+    "https://*.tiktok.com/*",
+    "https://*.x.com/*",
+    "https://*.twitter.com/*",
+    "https://*.threads.net/*",
+    "https://*.threads.com/*",
+    "https://*.reddit.com/*"
+  ],
+
+  "background": {
+    "scripts": ["background.js"]
+  },
+
+  "action": {
+    "default_title": "MediaGrabber",
+    "default_popup": "popup.html"
+  },
+
+  "icons": {
+    "128": "icons/icon128.png"
+  }
+}

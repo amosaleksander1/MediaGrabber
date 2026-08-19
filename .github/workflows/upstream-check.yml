@@ -41,6 +41,9 @@ jobs:
       - name: Verify media-mode URL handling
         run: python tests/test_media_urls.py
 
+      - name: Verify the browser bridge
+        run: python tests/test_bridge.py
+
       - name: Open a pull request when upstream versions moved
         if: steps.check.outcome == 'success'
         uses: peter-evans/create-pull-request@v6

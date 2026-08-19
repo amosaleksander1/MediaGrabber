@@ -8,8 +8,10 @@ from .checkup import run_checkup
 from .config import (AUDIO_FORMATS, CONFIG_FILE, COOKIES_FILE, LOGS_DIR,
                      OUTPUT_DIR, RESOLUTION_OPTIONS, URLS_FILE, VIDEO_FORMATS,
                      load_config, save_config)
-from .cookies import choose_cookie_browser
+from .cookies import choose_cookie_browser, detect_installed_browsers
 from .download import DownloadStopped, download_single
+from .nativehost import (CHROME_EXTENSION_ID, bridge_binary, register,
+                         status, unregister)
 from .platform_support import (IS_WIN, OS_LABEL, PLATFORM_TAG, enable_ansi,
                                open_path, pick_folder_dialog, stop_hint_text)
 from .tools import run_updates
@@ -55,12 +57,12 @@ def format_status(cfg):
 
 def show_menu(cfg):
     print(f"""
-{C.BOLD}┌──────────────────────────────────────────────┐
+{C.BOLD}┌───────────────────────────────────────────────┐
 │  {C.CYAN}FORMAT{C.RESET}{C.BOLD}:      {C.WHITE}{format_status(cfg)}{C.RESET}{C.BOLD}
 │  {C.CYAN}AUTO-UPDATE{C.RESET}{C.BOLD}: {C.WHITE}{"ON" if cfg.get("auto_update", True) else "OFF"}{C.RESET}{C.BOLD}
 │  {C.CYAN}OUTPUT{C.RESET}{C.BOLD}:      {C.DIM}{cfg.get("output_dir", OUTPUT_DIR)}{C.RESET}{C.BOLD}
 │  {C.CYAN}PLATFORM{C.RESET}{C.BOLD}:    {C.DIM}{OS_LABEL} ({PLATFORM_TAG}){C.RESET}{C.BOLD}
-├──────────────────────────────────────────────┤
+├───────────────────────────────────────────────┤
 │  {C.GREEN}[1]{C.RESET}{C.BOLD}  Download from urls.txt                  │
 │  {C.GREEN}[2]{C.RESET}{C.BOLD}  Download single URL                     │
 │  {C.GREEN}[3]{C.RESET}{C.BOLD}  Change format (Video / Audio / Media)   │
@@ -73,8 +75,9 @@ def show_menu(cfg):
 │  {C.GREEN}[10]{C.RESET}{C.BOLD} Checkup (tools + login)                 │
 │  {C.GREEN}[11]{C.RESET}{C.BOLD} Set login cookie browser                │
 │  {C.GREEN}[12]{C.RESET}{C.BOLD} Delete saved login cookies              │
+│  {C.GREEN}[13]{C.RESET}{C.BOLD} Connect browser extension               │
 │  {C.GREEN}[0]{C.RESET}{C.BOLD}  Exit                                    │
-└──────────────────────────────────────────────┘{C.RESET}
+└───────────────────────────────────────────────┘{C.RESET}
 """)
 
 
@@ -262,6 +265,50 @@ def process_single(cfg):
 
 # ── MAIN ─────────────────────────────────────────────────────────────────────
 
+def connect_extension(cfg):
+    """Register (or remove) the native-messaging host for installed browsers.
+
+    A browser will only launch the bridge if it has been told about it, via a
+    manifest naming the executable and the extension IDs allowed to connect.
+    Everything written here is per-user: no admin rights, nothing system-wide.
+    """
+    browsers = detect_installed_browsers()
+    if not browsers:
+        log("No supported browsers detected.", "WARN")
+        return
+
+    binary = bridge_binary()
+    print(f"\n  {C.BOLD}{C.CYAN}Browser extension bridge{C.RESET}")
+    print(f"  {C.DIM}{'-' * 45}{C.RESET}")
+    print(f"  Bridge: {C.DIM}{binary}{C.RESET}")
+    if not binary.exists():
+        log("Bridge program not found next to the app — rebuild with BUILD.bat "
+            "or run from source.", "WARN")
+
+    for browser, ok, detail in status(browsers):
+        mark = f"{C.GREEN}connected{C.RESET}" if ok else f"{C.DIM}not connected{C.RESET}"
+        print(f"  {browser:<10} {mark}  {C.DIM}{detail}{C.RESET}")
+
+    print(f"\n  {C.GREEN}[1]{C.RESET} Connect these browsers")
+    print(f"  {C.GREEN}[2]{C.RESET} Disconnect")
+    print(f"  {C.DIM}[0] Cancel{C.RESET}\n")
+    choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
+
+    if choice == "1":
+        for browser, ok, detail in register(browsers):
+            log(f"  {browser}: {'registered' if ok else 'failed'} — {detail}",
+                "OK" if ok else "ERROR")
+        log("Now load the extension in your browser:", "INFO")
+        log(f"  Chromium: chrome://extensions -> Developer mode -> "
+            f"Load unpacked -> the 'extension' folder (ID {CHROME_EXTENSION_ID})", "INFO")
+        log("  Firefox:  install the signed .xpi from the MediaGrabber release", "INFO")
+        log("Then click the extension and choose 'Send my login to MediaGrabber'.",
+            "INFO")
+    elif choice == "2":
+        for browser, ok, detail in unregister(browsers):
+            log(f"  {browser}: {detail}", "OK" if ok else "INFO")
+
+
 def main():
     enable_ansi()
     init_logging(LOGS_DIR)
@@ -296,6 +343,7 @@ def main():
         "9": lambda: open_path(URLS_FILE),
         "10": lambda: run_checkup(cfg),
         "11": lambda: choose_cookie_browser(cfg),
+        "13": lambda: connect_extension(cfg),
     }
 
     while True:

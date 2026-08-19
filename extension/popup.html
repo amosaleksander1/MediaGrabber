@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+      width: 260px; margin: 0; padding: 14px;
+      background: Canvas; color: CanvasText;
+    }
+    h1 { font-size: 14px; margin: 0 0 2px; }
+    .sub { opacity: .65; font-size: 12px; margin-bottom: 12px; }
+    button {
+      display: block; width: 100%; padding: 8px 10px; margin-bottom: 8px;
+      font: inherit; font-weight: 600; cursor: pointer;
+      border: 1px solid rgba(128,128,128,.4); border-radius: 6px;
+      background: rgba(128,128,128,.10); color: inherit;
+    }
+    button:hover { background: rgba(128,128,128,.20); }
+    button:disabled { opacity: .5; cursor: default; }
+    #status {
+      margin-top: 10px; padding: 8px; border-radius: 6px; font-size: 12px;
+      background: rgba(128,128,128,.12); white-space: pre-wrap; word-break: break-word;
+    }
+    .ok { color: #1a7f37; }
+    .err { color: #c62828; }
+    .hint { margin-top: 10px; font-size: 11px; opacity: .6; }
+  </style>
+</head>
+<body>
+  <h1>MediaGrabber</h1>
+  <div class="sub" id="version">checking connection…</div>
+
+  <button id="cookies">Send my login to MediaGrabber</button>
+  <button id="queue">Queue this page for download</button>
+
+  <div id="status">Ready.</div>
+  <div class="hint">
+    Not connected? Open MediaGrabber and choose menu [13] to register the bridge.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

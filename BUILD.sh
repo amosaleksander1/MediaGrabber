@@ -43,15 +43,29 @@ echo "Compiling..."
     --collect-submodules mediagrabber \
     mediagrabber.py
 
-rm -rf build __pycache__ MediaGrabber.spec
+# The browser launches this one directly, so it is a separate program: Chrome
+# and Firefox pass different arguments, and its stdout is the wire protocol.
+echo "Compiling the browser bridge..."
+"$PY" -m PyInstaller \
+    --onefile \
+    --console \
+    --name mediagrabber-bridge \
+    --clean \
+    --noconfirm \
+    --distpath "$PWD" \
+    --hidden-import mediagrabber \
+    --collect-submodules mediagrabber \
+    bridge_main.py
+
+rm -rf build __pycache__ MediaGrabber.spec mediagrabber-bridge.spec
 
 # A binary produced locally is not quarantined, but one copied from a download
 # is — clear the attribute so Gatekeeper does not block the first launch.
 if [ "$(uname -s)" = "Darwin" ]; then
-    xattr -dr com.apple.quarantine ./MediaGrabber 2>/dev/null || true
+    xattr -dr com.apple.quarantine ./MediaGrabber ./mediagrabber-bridge 2>/dev/null || true
 fi
 
-chmod +x ./MediaGrabber
+chmod +x ./MediaGrabber ./mediagrabber-bridge
 
 echo
 echo "============================================"

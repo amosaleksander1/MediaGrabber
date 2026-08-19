@@ -326,9 +326,16 @@ def _cdp_call(ws, req_id, method, params=None):
     return {}
 
 
-def cdp_cookies_to_netscape(cookies, path):
-    """Write CDP ``Network.getAllCookies`` output as a Netscape cookies.txt."""
-    lines = ["# Netscape HTTP Cookie File", "# Exported by MediaGrabber", ""]
+def cdp_cookies_to_netscape(cookies, path, append=False):
+    """Write CDP ``Network.getAllCookies`` output as a Netscape cookies.txt.
+
+    ``append`` adds rows to an existing file instead of replacing it. The
+    browser extension sends cookies in batches, and because each batch arrives
+    in its own native-host process nothing can be accumulated in memory — so
+    only the first batch clears what was there before.
+    """
+    lines = [] if append else ["# Netscape HTTP Cookie File",
+                               "# Exported by MediaGrabber", ""]
     n = 0
     for c in cookies:
         domain = c.get("domain", "")
@@ -342,7 +349,12 @@ def cdp_cookies_to_netscape(cookies, path):
         lines.append(f"{prefix}{domain}\t{flag}\t{cpath}\t{secure}\t{expires}\t"
                      f"{c.get('name', '')}\t{c.get('value', '')}")
         n += 1
-    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    text = ("\n".join(lines) + "\n") if lines else ""
+    if append and Path(path).exists():
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(text)
+    else:
+        Path(path).write_text(text, encoding="utf-8")
     return n
 
 

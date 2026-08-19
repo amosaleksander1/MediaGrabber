@@ -37,12 +37,22 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: The browser launches this one directly, so it is a separate program.
+echo Compiling mediagrabber-bridge.exe...
+python -m PyInstaller --onefile --console --name mediagrabber-bridge --clean --noconfirm --collect-submodules mediagrabber --distpath "%APPDIR%" "%APPDIR%\bridge_main.py"
+if errorlevel 1 (
+    echo ERROR: Build failed.
+    pause
+    exit /b 1
+)
+
 :: Cleanup build artifacts
 echo.
 echo Cleaning up build files...
 if exist "%APPDIR%\build" rmdir /s /q "%APPDIR%\build"
 if exist "%APPDIR%\__pycache__" rmdir /s /q "%APPDIR%\__pycache__"
 if exist "%APPDIR%\MediaGrabber.spec" del /q "%APPDIR%\MediaGrabber.spec"
+if exist "%APPDIR%\mediagrabber-bridge.spec" del /q "%APPDIR%\mediagrabber-bridge.spec"
 
 echo.
 echo ============================================

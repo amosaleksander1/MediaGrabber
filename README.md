@@ -11,6 +11,7 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 - **Images, not just video** — posts on Instagram, TikTok, X/Twitter, Reddit, Pinterest and Threads are recognised, named from their caption, and downloaded whole. Image-only posts that yt-dlp cannot touch are picked up by gallery-dl automatically, on any site it supports
 - **Instagram & TikTok carousels** — detects real multi-item posts and downloads *all* slides (images **and** videos) into a subfolder named from the post caption (e.g. `pink ketemu butter yellow/`), with files named to match (`pink ketemu butter yellow - 01.jpg`). Single reels/posts download normally — no folder.
 - **Baked-in login** — borrows your existing browser session (no password stored), with a one-time cookie export so downloads work while the browser is open
+- **Optional browser extension** — hands your login straight to the app, skipping cookie decryption entirely (no Keychain prompt, no Full Disk Access, no closing the browser), and sends the page you are looking at to the download queue
 - **Self-maintaining** — yt-dlp, ffmpeg, Deno and gallery-dl are auto-downloaded for *your* platform and architecture; update checks run at most every 14 days (or when a tool breaks), so startup is instant
 - **Smart retries** — transient errors retry with backoff; permanent errors (private/removed posts) fail fast; extraction errors from an outdated downloader trigger an automatic tool update + retry
 - **Graceful stop** — press `Q` during downloads (macOS/Linux: `Q` then Enter) to cancel cleanly
@@ -59,7 +60,7 @@ Open Terminal, then run (adjust the path to wherever you put the folder):
 ```bash
 cd ~/Applications/MediaGrabber
 xattr -dr com.apple.quarantine .
-chmod +x MediaGrabber run.command
+chmod +x MediaGrabber mediagrabber-bridge run.command
 ```
 
 Then double-click `run.command`. You only ever do this once per download.
@@ -131,7 +132,7 @@ Cookies are exported once to `tools/cookies.txt` and reused, so downloads keep w
 Download `MediaGrabber-linux-x64.zip`, unzip, then:
 
 ```bash
-chmod +x MediaGrabber run.sh
+chmod +x MediaGrabber mediagrabber-bridge run.sh
 ./run.sh
 ```
 
@@ -174,6 +175,7 @@ Both use PyInstaller. A macOS build is native to whichever architecture you buil
 [4]  Change resolution             [10] Checkup (tools + login)
 [5]  Change output folder          [11] Set login cookie browser
 [6]  Toggle auto-update            [12] Delete saved login cookies
+                                   [13] Connect browser extension
 [0]  Exit
 ```
 
@@ -186,6 +188,35 @@ Instagram rejects anonymous downloads, and scripted username/password logins get
 3. All later downloads use the cached file, browser open or not. If the session expires, the checkup detects it, re-exports, and re-probes automatically.
 
 > ⚠️ `tools/cookies.txt` **is your live Instagram session**. Anyone with that file can act as your account. It is `.gitignore`d — never commit or share it. Use menu `[12]` to delete it at any time (it re-exports automatically when next needed).
+
+## Browser extension (the easy way to log in)
+
+Reading a browser's cookie jar from the outside means defeating its encryption — App-Bound Encryption on Windows, the Keychain on macOS — which is why the steps above exist at all. An extension already holds those cookies, so it can simply hand them over: no Keychain prompt, no Full Disk Access, no closing the browser first.
+
+**The extension downloads nothing.** It reads cookies for the sites listed in `LOGIN_DOMAINS` and can send the current tab's link to the app. Everything else happens in MediaGrabber exactly as before.
+
+### Setting it up
+
+1. In MediaGrabber, choose menu `[13]` → `[1]`. This registers the bridge for every browser it finds (per-user only — no admin rights, nothing system-wide).
+2. Load the extension:
+   - **Chromium** (Chrome, Edge, Brave, Vivaldi): `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick the `extension` folder. Chrome blocks sideloaded extensions installed any other way, so this is the supported route.
+   - **Firefox**: install `MediaGrabber-extension-firefox.zip` from the release.
+3. Click the MediaGrabber toolbar icon → **Send my login to MediaGrabber**.
+
+The popup shows `connected to MediaGrabber v3.2.0` when the bridge is reachable. If it says otherwise, run menu `[13]` again — the registration records an absolute path, so **moving or renaming the app folder breaks the link**. `[13]` reports a stale path rather than failing silently.
+
+You can also right-click any page or link → **Send this page to MediaGrabber**, which appends it to `urls.txt` for the next run.
+
+### What it can and cannot see
+
+| | |
+| --- | --- |
+| Reads cookies for | Instagram, TikTok, X/Twitter, Threads, Reddit — nothing else |
+| Talks to | Only the local MediaGrabber bridge, over native messaging |
+| Network access | None. The extension makes no requests of its own |
+| Who may connect | Only extension ID `aoeenjihnmilloleedphnegngpadbjef`, pinned in the host manifest |
+
+Native messaging has no open port: the browser launches the bridge as a child process and the manifest's allow-list decides who may speak to it.
 
 ## Pulling images and media out of a post
 
@@ -261,13 +292,17 @@ mediagrabber/
   config.py                paths, defaults, format lists
   tools.py                 per-platform tool sources + auto-update
   cookies.py               browser login, per-OS cookie decryption
+  bridge.py                native-messaging protocol for the extension
+  nativehost.py            registering the bridge with each browser
   probe.py                 post detection, item count and naming
   download.py              the download engine
   checkup.py               health check
   app.py                   menu loop
   ui.py / net.py / shell.py  output, HTTP, subprocess helpers
+extension/                 browser extension (cookies + send-to-app)
+bridge_main.py             entry point the browser launches
 scripts/check_upstream.py  weekly upstream-asset verification (CI)
-tests/                     platform matrix test
+tests/                     platform matrix, media URLs, bridge protocol
 ```
 
 Adding a platform is deliberately a `platform_support.py` + `tools.py` change; nothing else tests `sys.platform` directly.

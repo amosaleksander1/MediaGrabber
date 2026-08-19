@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "MediaGrabber Bridge",
+  "version": "1.0.0",
+  "description": "Hands your existing browser session and the current post link to MediaGrabber running on this computer.",
+
+  "//key": "Fixes the extension ID to aoeenjihnmilloleedphnegngpadbjef. Without this, Chrome derives the ID from the folder path and the native host's allowed_origins would never match. Do not change it.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0nL1UrL9PGqH7PM46NJHeHMAPNjsErVaXj62qJ/FgN1y+zBWoue/UdsD1S9KfNepQKSuSbv9zaiNBVq4gy+v/CN4Vjtg05fplNl0gRPX1R+jiB+S+S8wVaaE0JmduEnIwPGuk1fucvJkN64ecQd8XhIaT5yIhPNhOvq3Vev16Eq6L22tcwgU7xfAFJUfZgFouG6iRR2sgnG6UjKb3cJxwznMyFuq9WI6V+SMVYQDkxSmLcO6MIyMYzIe/TLeZi8snOi+A857WRy5NicEHe1NtdrfnERdRhLa/y2wUwuyvPf7iFB8+9HvqwFhKv5wajOmV+TLpdc4/Y8yhiLJMm3GQQIDAQAB",
+
+  "permissions": ["cookies", "activeTab", "contextMenus", "nativeMessaging"],
+
+  "//host_permissions": "Must mirror LOGIN_DOMAINS in mediagrabber/cookies.py. Cookies are only ever read for these sites.",
+  "host_permissions": [
+    "https://*.instagram.com/*",
+    "https://*.tiktok.com/*",
+    "https://*.x.com/*",
+    "https://*.twitter.com/*",
+    "https://*.threads.net/*",
+    "https://*.threads.com/*",
+    "https://*.reddit.com/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "action": {
+    "default_title": "MediaGrabber",
+    "default_popup": "popup.html"
+  },
+
+  "icons": {
+    "128": "icons/icon128.png"
+  }
+}

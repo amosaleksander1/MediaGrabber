@@ -32,11 +32,13 @@ jobs:
           python-version: "3.12"
       - run: pip install pyflakes
       - name: Lint
-        run: pyflakes mediagrabber/*.py mediagrabber.py scripts/*.py tests/*.py
+        run: pyflakes mediagrabber/*.py mediagrabber.py bridge_main.py scripts/*.py tests/*.py
       - name: Platform matrix
         run: python tests/test_platform_matrix.py
       - name: Media-mode URL handling
         run: python tests/test_media_urls.py
+      - name: Browser bridge
+        run: python tests/test_bridge.py
 
   build:
     needs: test
@@ -79,12 +81,24 @@ jobs:
           --collect-submodules mediagrabber
           mediagrabber.py
 
+      # The browser launches this one directly, so it must be its own program:
+      # Chrome and Firefox pass different arguments, and stdout is the protocol.
+      - name: Build the browser bridge
+        run: >
+          python -m PyInstaller --onefile --console --name mediagrabber-bridge
+          --clean --noconfirm --distpath dist
+          --collect-submodules mediagrabber
+          bridge_main.py
+
       - name: Stage archive (POSIX)
         if: runner.os != 'Windows'
         run: |
           mkdir -p stage
           cp dist/${{ matrix.binary }} stage/
           chmod +x stage/${{ matrix.binary }}
+          cp dist/mediagrabber-bridge stage/
+          chmod +x stage/mediagrabber-bridge
+          cp -r extension stage/
           cp README.md LICENSE stage/
           if [ "${{ runner.os }}" = "macOS" ]; then
             cp run.command stage/
@@ -101,6 +115,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force stage | Out-Null
           Copy-Item dist/${{ matrix.binary }} stage/
+          Copy-Item dist/mediagrabber-bridge.exe stage/
+          Copy-Item -Recurse extension stage/extension
           Copy-Item README.md,LICENSE,RUN.bat stage/
           Compress-Archive -Path stage/* -DestinationPath MediaGrabber-${{ matrix.target }}.zip
 
@@ -131,6 +147,19 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Package the browser extension
+        run: |
+          # Chromium loads the folder as-is. Firefox needs its own manifest, so
+          # each engine gets an archive that is correct without editing.
+          mkdir -p ext-chrome ext-firefox artifacts
+          cp -r extension/. ext-chrome/
+          rm -f ext-chrome/manifest.firefox.json
+          cp -r extension/. ext-firefox/
+          mv ext-firefox/manifest.firefox.json ext-firefox/manifest.json
+          (cd ext-chrome && zip -qr ../artifacts/MediaGrabber-extension-chrome.zip .)
+          (cd ext-firefox && zip -qr ../artifacts/MediaGrabber-extension-firefox.zip .)
+          ls -l artifacts
+
       - name: Generate changelog
         id: changelog
         run: |
@@ -158,6 +187,12 @@ jobs:
             echo "| macOS — Apple Silicon (M1/M2/M3/M4) | \`MediaGrabber-macos-arm64.zip\` |"
             echo "| macOS — Intel | \`MediaGrabber-macos-x64.zip\` |"
             echo "| Linux (x86-64) | \`MediaGrabber-linux-x64.zip\` |"
+            echo
+            echo "The browser extension is optional and hands your existing"
+            echo "login to the app, so no cookie export is needed:"
+            echo "\`MediaGrabber-extension-chrome.zip\` /"
+            echo "\`MediaGrabber-extension-firefox.zip\` — see *Browser extension*"
+            echo "in the README."
             echo
             echo "> **macOS:** the binary is unsigned, so the first launch needs"
             echo "> one extra step — see *First run on macOS* in the README."

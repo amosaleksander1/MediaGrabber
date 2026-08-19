@@ -31,3 +31,9 @@ release/
 
 # macOS cruft
 .DS_Store
+
+# Extension signing key — fixes the Chrome extension ID. Keep it backed up
+# somewhere safe, but never in the repository.
+*.pem
+/mediagrabber-bridge
+/mediagrabber-bridge.exe
