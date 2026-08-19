@@ -140,10 +140,24 @@ def check_dispatch(fail):
 
 def check_manifests(fail):
     """Manifest shape per browser, resolved for every OS from this one host."""
+    # Pretending to be Windows on a Linux runner means platform_support's
+    # import-time Windows-only bits have to exist: it imports msvcrt and reads
+    # subprocess.CREATE_NO_WINDOW at module level. Same stubs as
+    # test_platform_matrix.py — without them this passes on Windows and fails
+    # everywhere else.
     child = (
-        "import sys, json, types\n"
+        "import sys, json, types, os\n"
+        "import subprocess, urllib.request, socket, shutil  # noqa: F401\n"
         "sys.platform = {plat!r}\n"
         "sys.path.insert(0, {repo!r})\n"
+        "if {plat!r} == 'win32':\n"
+        "    msvcrt = types.ModuleType('msvcrt')\n"
+        "    msvcrt.kbhit = lambda: False\n"
+        "    msvcrt.getwch = lambda: ''\n"
+        "    sys.modules['msvcrt'] = msvcrt\n"
+        "    subprocess.CREATE_NO_WINDOW = 0x08000000\n"
+        "    os.environ.setdefault('LOCALAPPDATA', r'C:\\\\Users\\\\test\\\\AppData\\\\Local')\n"
+        "    os.environ.setdefault('APPDATA', r'C:\\\\Users\\\\test\\\\AppData\\\\Roaming')\n"
         "import pathlib\n"
         "pathlib.Path.home = classmethod(lambda cls: pathlib.Path({home!r}))\n"
         "from mediagrabber import nativehost as nh\n"
