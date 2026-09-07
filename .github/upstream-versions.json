@@ -1,11 +1,11 @@
 {
-  "checked_at": "2026-08-16",
+  "checked_at": "2026-09-07",
   "upstream": {
-    "yt-dlp": "2026.07.04",
-    "gallery-dl": "2026.08.16",
-    "deno": "v2.9.5",
+    "yt-dlp": "2026.08.19",
+    "gallery-dl": "2026.09.07",
+    "deno": "v2.9.6",
     "ffmpeg-btbn": "latest",
-    "ffmpeg-macos-arm64": "1785863997_9.0",
-    "ffmpeg-macos-x64": "1785871427_9.0"
+    "ffmpeg-macos-arm64": "1787073674_9.0.1",
+    "ffmpeg-macos-x64": "1787081194_9.0.1"
   }
 }
