@@ -196,7 +196,7 @@ def download_gallerydl(url, target_dir, cfg, tag, base_name=None, single=False,
         args += cargs
     elif needs_login(url):
         log(f"{tag} No login cookies — this site may reject the request "
-            f"(menu [11] / [10])", "WARN")
+            f"(menu [4] Login & Browser)", "WARN")
 
     args.append(url)
     log(f"  Target: {target_dir}", "INFO")

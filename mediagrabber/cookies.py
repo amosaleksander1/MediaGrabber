@@ -516,7 +516,7 @@ def refresh_cookie_cache(cfg, interactive=True):
             log("Using previously cached login cookies (may be stale).", "WARN")
             return True
         log(f"Could not export cookies from {b.title()}. Tip: log in with "
-            "Firefox/Zen and select it via menu [11].", "ERROR")
+            "Firefox/Zen and select it via menu [4] Login & Browser.", "ERROR")
         return False
 
     # Everywhere else yt-dlp can read the store itself. On macOS Chromium,

@@ -474,7 +474,7 @@ def run_updates(cfg, force=False):
 
     Throttled: if all tools exist and the last check was under
     ``UPDATE_INTERVAL_DAYS`` ago this returns immediately, so startup is
-    instant. ``force=True`` (menu [7], or after a tool failure) always checks.
+    instant. ``force=True`` (menu [5] Tools Update, or after a tool failure) always checks.
     """
     if not force:
         if not cfg.get("auto_update", True):
@@ -488,7 +488,7 @@ def run_updates(cfg, force=False):
             if age < UPDATE_INTERVAL_DAYS * 86400:
                 days_left = UPDATE_INTERVAL_DAYS - age / 86400
                 log(f"Tools ready — next update check in {max(days_left, 0):.0f} "
-                    "day(s) (menu [7] to force)", "OK")
+                    "day(s) (menu [5] to force)", "OK")
                 return True
 
     if IS_MAC:
