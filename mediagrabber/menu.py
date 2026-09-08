@@ -50,6 +50,10 @@ _INDENT = "  "
 #: the same way everywhere. Ten audio formats do not fit on one line.
 _MIN_WIDTH = 60
 
+#: Below this there is nothing sensible to draw, so stop shrinking and let it
+#: scroll rather than rendering a menu with no menu in it.
+_MIN_HEIGHT = 14
+
 
 def screen_width():
     """Usable columns, minus one so a full line never wraps on its own.
@@ -63,6 +67,20 @@ def screen_width():
     except Exception:
         columns = 80
     return max(_MIN_WIDTH, columns - 1)
+
+
+def screen_height():
+    """Usable rows. Same hazard as the width, one axis over.
+
+    A layout taller than the window scrolls while it is being drawn, which puts
+    row 0 above the top of the window and throws every recorded click box out
+    of step with the text.
+    """
+    try:
+        rows = shutil.get_terminal_size((80, 24)).lines
+    except Exception:
+        rows = 24
+    return max(_MIN_HEIGHT, rows)
 
 
 def plain(text):
@@ -125,16 +143,40 @@ def navigable_rows(cfg):
 
 
 def build_layout(cfg, focus_row=0, focus_col=0, login="none saved",
-                 interactive=True, width=None, with_banner=True):
-    """Render the whole screen and record where everything landed.
+                 interactive=True, width=None, with_banner=True,
+                 height=None, problem=None):
+    """Render the screen, trimming it until it fits, and map every click box.
 
-    Returns the lines to draw plus the click map. The banner is part of the
-    layout so the y coordinates in that map are absolute screen rows — the
-    interactive menu repaints from the top of the window, so row 0 of the
-    layout is row 0 of the terminal. The typed fallback scrolls instead of
-    repainting and has already printed the banner once, so it turns this off.
+    The banner is part of the layout so the y coordinates in that map are
+    absolute screen rows — the interactive menu repaints from the top of the
+    window, so row 0 of the layout is row 0 of the terminal.
+
+    Fitting has to happen *here* rather than in the caller: a layout taller
+    than the window scrolls as it is drawn, and then row 0 is no longer the top
+    of the window and every recorded box points at the wrong text. So when the
+    full screen is too tall, this drops the decorative parts in order — banner
+    first, then the output/platform footer — and returns the map for what it
+    actually drew.
     """
-    width = width or screen_width()
+    height = height or (screen_height() if interactive else None)
+    show_footer = True
+
+    while True:
+        layout = _compose(cfg, focus_row, focus_col, login, interactive,
+                          width or screen_width(), with_banner, problem,
+                          show_footer)
+        if not height or len(layout.lines) <= height:
+            return layout
+        if with_banner:
+            with_banner = False          # 5 lines, and it is pure decoration
+        elif show_footer:
+            show_footer = False          # 3 more; the settings still show
+        else:
+            return layout                # nothing left to give up
+
+
+def _compose(cfg, focus_row, focus_col, login, interactive, width,
+             with_banner, problem, show_footer):
     lines = list(banner_lines()) if with_banner else []
     hits = []
     rows = navigable_rows(cfg)
@@ -200,14 +242,23 @@ def build_layout(cfg, focus_row=0, focus_col=0, login="none saved",
         lines.append(prefix + body)
         row_index += 1
 
-    lines.append(f"{_INDENT}{C.DIM}{'─' * 56}{C.RESET}")
-    out = str(cfg.get("output_dir", ""))
-    room = width - len(_INDENT) - len("Output:   ")
-    if len(out) > room > 3:
-        out = "..." + out[-(room - 3):]
-    lines.append(f"{_INDENT}{C.DIM}Output:   {out}{C.RESET}")
-    lines.append(f"{_INDENT}{C.DIM}Platform: {OS_LABEL} ({PLATFORM_TAG})"
-                 f"    Login: {login}{C.RESET}")
+    if show_footer:
+        lines.append(f"{_INDENT}{C.DIM}{'─' * 56}{C.RESET}")
+        out = str(cfg.get("output_dir", ""))
+        room = width - len(_INDENT) - len("Output:   ")
+        if len(out) > room > 3:
+            out = "..." + out[-(room - 3):]
+        lines.append(f"{_INDENT}{C.DIM}Output:   {out}{C.RESET}")
+        lines.append(f"{_INDENT}{C.DIM}Platform: {OS_LABEL} ({PLATFORM_TAG})"
+                     f"    Login: {login}{C.RESET}")
+
+    # A startup problem has to live *in* the layout. Logging it before the menu
+    # opens does not work: the first repaint starts at the top of the window
+    # and paints straight over it. Here it survives every redraw, which also
+    # suits it better — the condition lasts until something is done about it.
+    if problem:
+        lines.append(f"{_INDENT}{C.YELLOW}! {problem}{C.RESET}"[:width + 20])
+
     lines.append("")
 
     if interactive:

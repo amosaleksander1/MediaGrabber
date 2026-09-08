@@ -141,6 +141,42 @@ def _check_one_layout(fail, cfg, width):
                     fail(f"{where} {key}={value!r} is drawn but not clickable")
 
 
+def check_fits_the_window(fail):
+    """A layout taller than the window scrolls, and scrolling breaks clicking.
+
+    Once the screen scrolls mid-render, layout row 0 is no longer the top of
+    the window and every click box points at the wrong text. 80x25 is the
+    classic console size and the settings alone are most of it, so this is a
+    real configuration, not a corner case.
+    """
+    for height in (25, 30, 40):
+        for cfg in (_cfg(), _cfg(mode="audio")):
+            for problem in (None, "Startup found problems — see the log"):
+                layout = build_layout(cfg, width=80, height=height,
+                                      problem=problem)
+                if len(layout.lines) > height:
+                    fail(f"[{cfg['mode']} @ {height} rows] layout is "
+                         f"{len(layout.lines)} lines and would scroll")
+                # Trimming must not cost anything you have to click.
+                for _, name, _, _ in ACTIONS:
+                    if not any(h.target == ("action", name, None)
+                               for h in layout.hits):
+                        fail(f"[{cfg['mode']} @ {height} rows] trimming lost "
+                             f"the {name} action")
+                for _, key, options in settings_rows(cfg):
+                    for value, _ in options:
+                        if not any(h.target == ("set", key, value)
+                                   for h in layout.hits):
+                            fail(f"[{cfg['mode']} @ {height} rows] trimming "
+                                 f"lost {key}={value!r}")
+
+    # A problem found at startup has to reach the screen: it is logged before
+    # the menu opens, and the first repaint would paint straight over it.
+    warned = build_layout(_cfg(), width=80, problem="disk on fire")
+    if not any("disk on fire" in plain(line) for line in warned.lines):
+        fail("a startup problem must be visible on the menu itself")
+
+
 def check_mode_reshapes(fail):
     """Audio has no resolution, so that row must leave rather than go dead."""
     keys = [key for _, key, _ in settings_rows(_cfg(mode="audio"))]
@@ -244,12 +280,14 @@ def main():
 
     check_decoding(fail)
     check_hit_boxes(fail)
+    check_fits_the_window(fail)
     check_mode_reshapes(fail)
     check_navigation(fail)
     check_fallback(fail)
 
     print("Checked escape/mouse decoding, every option's click box in both "
-          "modes, row reshaping, focus movement and the piped fallback.")
+          "modes at three widths, fitting into a 25-row window, row "
+          "reshaping, focus movement and the piped fallback.")
     print("=" * 60)
     if failures:
         print("FAILURES:")

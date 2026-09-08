@@ -182,12 +182,15 @@ class Screen:
     # -- drawing -----------------------------------------------------------
 
     def render(self, lines):
-        """Repaint from the top of the window instead of appending."""
-        out = ["\033[H"]                       # home, without wiping scrollback
-        for line in lines:
-            out.append(line + "\033[K\r\n")    # erase the rest of each row
-        out.append("\033[J")                   # and anything left below
-        sys.stdout.write("".join(out))
+        """Repaint from the top of the window instead of appending.
+
+        The newline goes *between* lines, never after the last one: a newline
+        on the bottom row of the window scrolls the whole screen up, which
+        would put layout row 0 above the top of the window and leave every
+        recorded click box pointing at the wrong text.
+        """
+        body = "\033[K\r\n".join(lines)        # erase the rest of each row
+        sys.stdout.write("\033[H" + body + "\033[K\033[J")
         sys.stdout.flush()
 
     # -- input -------------------------------------------------------------

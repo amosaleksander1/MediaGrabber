@@ -420,7 +420,7 @@ def _handle_event(cfg, layout, focus, event):
     return None
 
 
-def _choose_interactively(cfg, focus):
+def _choose_interactively(cfg, focus, problem=None):
     """Own the terminal until the user picks an action, then give it back.
 
     Raw mode is left before anything runs, because a download scrolls its own
@@ -429,7 +429,7 @@ def _choose_interactively(cfg, focus):
     with Screen() as scr:
         while True:
             layout = build_layout(cfg, focus["row"], focus["col"],
-                                  login=login_source())
+                                  login=login_source(), problem=problem)
             scr.render(layout.lines)
             event = scr.read_event()
             if event is None:
@@ -439,11 +439,11 @@ def _choose_interactively(cfg, focus):
                 return action
 
 
-def _interactive_loop(cfg):
+def _interactive_loop(cfg, problem=None):
     focus = {"row": 0, "col": 0}
     while True:
         try:
-            action = _choose_interactively(cfg, focus)
+            action = _choose_interactively(cfg, focus, problem)
         except KeyboardInterrupt:
             print()
             log("Interrupted by user. Exiting.", "WARN")
@@ -524,13 +524,17 @@ def main():
         healthy = run_checkup(cfg, quick=True) and tools_ok
     print("\r" + " " * 40 + "\r", end="")
 
+    # Carried into the menu rather than printed here: the first repaint starts
+    # at the top of the window and would paint over anything printed first.
+    problem = None
     if not healthy:
-        log(f"Startup found problems — details in {log_file()}", "WARN")
-        print()
+        problem = f"Startup found problems — see {log_file()}"
 
     if is_interactive():
-        _interactive_loop(cfg)
+        _interactive_loop(cfg, problem)
     else:
+        if problem:
+            log(problem, "WARN")
         _typed_loop(cfg)
 
     print()
