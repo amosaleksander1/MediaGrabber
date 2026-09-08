@@ -44,6 +44,9 @@ jobs:
       - name: Verify the browser bridge
         run: python tests/test_bridge.py
 
+      - name: Verify the menu input decoding and click map
+        run: python tests/test_menu.py
+
       - name: Open a pull request when upstream versions moved
         if: steps.check.outcome == 'success'
         uses: peter-evans/create-pull-request@v6

@@ -13,7 +13,7 @@ from .ui import log
 def _check_tool(name, exe, vargs, quick, runner=None):
     """Returns True if the tool is usable (or assumed so in quick mode)."""
     if runner is None and not exe.exists():
-        log(f"  [MISSING] {name} — run menu [7] to install", "ERROR")
+        log(f"  [MISSING] {name} — run menu [5] Tools Update", "ERROR")
         return False
     if quick:
         log(f"  [OK] {name}: installed", "OK")
@@ -53,7 +53,7 @@ def run_checkup(cfg, probe_auth=True, quick=False):
 
     # gallery-dl may be a binary or a pip shim, so it is checked separately.
     if not gallerydl_available():
-        log("  [MISSING] gallery-dl — run menu [7] to install", "ERROR")
+        log("  [MISSING] gallery-dl — run menu [5] Tools Update", "ERROR")
         ok = False
     elif quick:
         log("  [OK] gallery-dl: installed", "OK")
@@ -80,7 +80,7 @@ def run_checkup(cfg, probe_auth=True, quick=False):
     browser = resolve_cookie_browser(cfg)
     if browser is None and not cookie_cache_valid():
         log("  [WARN] No login cookie source — Instagram carousels will fail.", "WARN")
-        log("         Set one via menu [11].", "INFO")
+        log("         Set one via menu [4] Login & Browser.", "INFO")
         ok = False
         return _finish(ok)
 
@@ -110,7 +110,8 @@ def run_checkup(cfg, probe_auth=True, quick=False):
                     if refresh_cookie_cache(cfg):
                         continue
                 log(f"  [FAIL] Instagram session not logged in (source: {browser}).", "ERROR")
-                log(f"         Log in at instagram.com in {browser}, then re-run menu [10].", "INFO")
+                log(f"         Log in at instagram.com in {browser}, then re-run "
+                    "menu [4] Login & Browser -> Checkup.", "INFO")
                 ok = False
             elif rc == 0:
                 log("  [OK] Instagram login session works.", "OK")
@@ -119,7 +120,7 @@ def run_checkup(cfg, probe_auth=True, quick=False):
                 log(f"  [WARN] Auth probe inconclusive: {tail}", "WARN")
                 if any(m in low for m in COOKIE_LOCK_MARKERS):
                     log(f"         {browser.title()} is locking its cookie DB — "
-                        "close it fully and re-run menu [10].", "INFO")
+                        "close it fully and re-run the checkup.", "INFO")
             break
 
     return _finish(ok)

@@ -7,7 +7,8 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 ## Features
 
 - **Batch or single downloads** — queue links in `urls.txt` or paste one at a time
-- **Two modes, one screen** — *Video / Image* (MP4/MKV/WebM/… with resolution capping, and the images in a post) or *Audio* (MP3/FLAC/Opus/…). Mode, format and resolution are all picked on one Download Settings screen rather than three separate menus
+- **Click-and-arrow menu** — mode, format and resolution sit on the main screen as rows of radio buttons you arrow through or click, and the screen redraws in place instead of scrolling away. Falls back to the plain numbered menu when there is no real terminal
+- **Two modes** — *Video / Image* (MP4/MKV/WebM/… with resolution capping, and the images in a post) or *Audio* (MP3/FLAC/Opus/…). Choosing Audio reshapes the screen: the audio formats replace the video ones and the resolution row disappears
 - **Images, not just video** — posts on Instagram, TikTok, X/Twitter, Reddit, Pinterest and Threads are recognised, named from their caption, and downloaded whole. Image-only posts that yt-dlp cannot touch are picked up by gallery-dl automatically, on any site it supports
 - **Instagram & TikTok carousels** — detects real multi-item posts and downloads *all* slides (images **and** videos) into a subfolder named from the post caption (e.g. `pink ketemu butter yellow/`), with files named to match (`pink ketemu butter yellow - 01.jpg`). Single reels/posts download normally — no folder.
 - **Baked-in login** — borrows your existing browser session (no password stored), with a one-time cookie export so downloads work while the browser is open
@@ -167,12 +168,35 @@ Both use PyInstaller. A macOS build is native to whichever architecture you buil
 
 ## The menu
 
+The settings are on the main screen, not behind a menu entry — move to a row
+and change it in place, or click it:
+
 ```
-[1]  Download Settings            [4]  Login & Browser
-[2]  Download Batch                [5]  Tools Update
-[3]  Download Single URL           [6]  Open Output Folder
-[0]  Exit
+DOWNLOAD SETTINGS
+  Mode          ▣ Video / Image   ▢ Audio
+  File format   ▣ MP4   ▢ MKV   ▢ WebM   ▢ AVI   ▢ MOV   ▢ FLV   ▢ TS
+  Resolution    ▣ Best  ▢ 2160p  ▢ 1440p  ▢ 1080p  ▢ 720p  ▢ 480p  …
+  Auto-update   ▣ On    ▢ Off
+
+  [1] Download Single URL      [5] Tools Update
+  [2] Download Batch           [6] Open Output Folder
+  [3] Edit Batch URLs          [7] Change Output Folder
+  [4] Login & Browser          [0] Exit
 ```
+
+**↑↓** moves between rows, **←→** changes the focused setting, **Enter** runs an
+action (or steps to the next option on a settings row), and the number keys work
+as shortcuts. If your terminal reports mouse clicks — Windows Terminal, conhost,
+and essentially every macOS and Linux terminal do — you can just **click** any
+option or menu entry.
+
+Choosing Audio removes the resolution row rather than leaving it there doing
+nothing, and switches the format list to the audio formats.
+
+The screen redraws in place instead of scrolling, so the menu stays where it is
+between downloads. When the app is piped or its output is redirected
+(`printf '0\n' | MediaGrabber`, CI, a log file), it falls back to the plain
+typed menu above — same numbers, plus `S` for the settings screen.
 
 ## How login works (no password stored)
 
@@ -297,12 +321,14 @@ mediagrabber/
   probe.py                 post detection, item count and naming
   download.py              the download engine
   checkup.py               health check
-  app.py                   menu loop
+  app.py                   menu loop and the actions it runs
+  menu.py                  screen layout + what a click at (x, y) means
+  screen.py                raw keyboard/mouse input and in-place drawing
   ui.py / net.py / shell.py  output, HTTP, subprocess helpers
 extension/                 browser extension (cookies + send-to-app)
 bridge_main.py             entry point the browser launches
 scripts/check_upstream.py  weekly upstream-asset verification (CI)
-tests/                     platform matrix, media URLs, bridge protocol
+tests/                     platform matrix, media URLs, bridge protocol, menu
 ```
 
 Adding a platform is deliberately a `platform_support.py` + `tools.py` change; nothing else tests `sys.platform` directly.

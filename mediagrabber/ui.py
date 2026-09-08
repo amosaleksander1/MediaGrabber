@@ -14,6 +14,7 @@ class C:
     DIM = "\033[2m"
     # Legacy cmd.exe ignores italic; the dim it is paired with still reads.
     ITALIC = "\033[3m"
+    REVERSE = "\033[7m"
     RED = "\033[91m"
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
@@ -41,6 +42,16 @@ MARK_ON, MARK_OFF = ("▣", "▢") if _renderable("▣▢") else ("(*)", "( )")
 
 _LOG_FILE = None
 
+#: While true, routine output goes to the session log only. Startup has a lot
+#: to say and almost none of it is news — checking five tools that are all fine
+#: pushed the title off the screen. The rule is deliberately "everything except
+#: a warning or an error", rather than a list of lines to hide, so a log line
+#: added later cannot quietly put the spam back.
+_QUIET = False
+
+#: Levels that are worth interrupting a quiet stretch for.
+_ALWAYS_SHOW = ("WARN", "ERROR")
+
 _COLOR_MAP = {
     "INFO": C.WHITE,
     "OK": C.GREEN,
@@ -64,11 +75,31 @@ def log_file():
     return _LOG_FILE
 
 
+class quiet_output:
+    """Send routine log lines to the file only, for the duration of a block.
+
+    Warnings and errors still print: staying quiet is for the case where there
+    is nothing to say, not for hiding a problem.
+    """
+
+    def __enter__(self):
+        global _QUIET
+        self._was = _QUIET
+        _QUIET = True
+        return self
+
+    def __exit__(self, *exc):
+        global _QUIET
+        _QUIET = self._was
+        return False
+
+
 def log(msg, level="INFO", color=None):
     """Print to the terminal with colour and append to the session log."""
     stamp = datetime.datetime.now().strftime("%H:%M:%S")
     c = color or _COLOR_MAP.get(level, C.WHITE)
-    print(f"{c}[{stamp}] [{level}]{C.RESET} {msg}")
+    if not _QUIET or level in _ALWAYS_SHOW:
+        print(f"{c}[{stamp}] [{level}]{C.RESET} {msg}")
     if _LOG_FILE:
         try:
             with open(_LOG_FILE, "a", encoding="utf-8") as f:
@@ -77,7 +108,8 @@ def log(msg, level="INFO", color=None):
             pass
 
 
-def banner():
+def banner_lines():
+    """The title box as a list of lines, so a redrawn screen can reuse it."""
     name = f"MediaGrabber v{APP_VERSION}"
     byline = "by Amos Aleksander"
     sub = f"{OS_LABEL} · {PLATFORM_TAG}"
@@ -90,13 +122,20 @@ def banner():
     titled = (f"{left}{C.WHITE}{name}{C.RESET}{C.BOLD}{C.CYAN}   "
               f"{C.DIM}{C.ITALIC}{byline}{C.RESET}{C.BOLD}{C.CYAN}{right}")
 
-    print(f"""
-{C.BOLD}{C.CYAN}╔══════════════════════════════════════════════════════╗
-║{titled}║
-║{C.RESET}{C.DIM}{sub.center(54)}{C.CYAN}{C.BOLD}║
-║{"Portable Media Downloader + Auto-Update".center(54)}║
-╚══════════════════════════════════════════════════════╝{C.RESET}
-""")
+    return [
+        f"{C.BOLD}{C.CYAN}╔══════════════════════════════════════════════════════╗",
+        f"║{titled}║",
+        f"║{C.RESET}{C.DIM}{sub.center(54)}{C.CYAN}{C.BOLD}║",
+        f"║{'Portable Media Downloader + Auto-Update'.center(54)}║",
+        f"╚══════════════════════════════════════════════════════╝{C.RESET}",
+    ]
+
+
+def banner():
+    print()
+    for line in banner_lines():
+        print(line)
+    print()
 
 
 def rule(width=55):

@@ -5,19 +5,21 @@ from pathlib import Path
 
 from . import APP_VERSION
 from .checkup import run_checkup
-from .config import (AUDIO_FORMATS, CONFIG_FILE, COOKIES_FILE, LOGS_DIR,
-                     OUTPUT_DIR, RESOLUTION_OPTIONS, URLS_FILE, VIDEO_FORMATS,
-                     load_config, save_config)
+from .config import (CONFIG_FILE, COOKIES_FILE, LOGS_DIR, OUTPUT_DIR,
+                     URLS_FILE, load_config, save_config)
 from .cookies import choose_cookie_browser, detect_installed_browsers
 from .download import DownloadStopped, download_single
+from .menu import (ACTIONS, build_layout, format_status, hit_test,
+                   settings_rows)
 from .nativehost import (CHROME_EXTENSION_ID, bridge_binary, register,
                          status, unregister)
-from .platform_support import (IS_WIN, OS_LABEL, PLATFORM_TAG, enable_ansi,
-                               open_path, pick_folder_dialog,
-                               set_console_title, stop_hint_text)
+from .platform_support import (IS_WIN, enable_ansi, open_path,
+                               pick_folder_dialog, set_console_title,
+                               stop_hint_text)
+from .screen import Screen, is_interactive
 from .tools import run_updates
 from .ui import (C, MARK_OFF, MARK_ON, banner, init_logging, log, log_file,
-                 rule)
+                 quiet_output, rule)
 
 # ── URL FILE ─────────────────────────────────────────────────────────────────
 
@@ -44,88 +46,62 @@ def clear_urls():
                          encoding="utf-8")
 
 
+def edit_urls():
+    """Open urls.txt in whatever the OS uses for text files."""
+    if not URLS_FILE.exists():
+        read_urls()
+    log(f"Opening {URLS_FILE}", "INFO")
+    try:
+        open_path(URLS_FILE)
+    except Exception as e:
+        log(f"Could not open the file ({e}). Edit it yourself at: {URLS_FILE}",
+            "WARN")
+
+
 # ── SETTINGS SCREENS ─────────────────────────────────────────────────────────
 
-def _short_label(key, value):
-    """Compact name for the settings grid — the long blurb goes underneath."""
-    if key == "resolution":
-        return {"best": "Best", "worst": "Worst"}.get(value, f"{value}p")
-    if key == "mode":
-        return {"video": "Video / Image", "audio": "Audio"}.get(value, value)
-    return value.upper()
+def login_source():
+    """Short description of where a login would come from, for the header."""
+    return "saved" if COOKIES_FILE.exists() else "none saved"
 
 
-def format_status(cfg):
-    if cfg.get("mode", "video") == "audio":
-        return f"Audio ({cfg.get('audio_format', 'mp3').upper()})"
-    res = _short_label("resolution", cfg.get("resolution", "best"))
-    return f"Video / Image ({cfg.get('video_format', 'mp4').upper()} @ {res})"
+def apply_setting(cfg, key, value):
+    cfg[key] = value
+    save_config(cfg)
 
 
 def show_menu(cfg):
-    print(f"""
-{C.BOLD}┌───────────────────────────────────────────────┐
-│  {C.CYAN}FORMAT{C.RESET}{C.BOLD}:      {C.WHITE}{format_status(cfg)}{C.RESET}{C.BOLD}
-│  {C.CYAN}AUTO-UPDATE{C.RESET}{C.BOLD}: {C.WHITE}{"ON" if cfg.get("auto_update", True) else "OFF"}{C.RESET}{C.BOLD}
-│  {C.CYAN}OUTPUT{C.RESET}{C.BOLD}:      {C.DIM}{cfg.get("output_dir", OUTPUT_DIR)}{C.RESET}{C.BOLD}
-│  {C.CYAN}PLATFORM{C.RESET}{C.BOLD}:    {C.DIM}{OS_LABEL} ({PLATFORM_TAG}){C.RESET}{C.BOLD}
-├───────────────────────────────────────────────┤
-│  {C.GREEN}[1]{C.RESET}{C.BOLD}  Download Settings                       │
-│  {C.GREEN}[2]{C.RESET}{C.BOLD}  Download Batch      {C.DIM}(from urls.txt){C.RESET}{C.BOLD}     │
-│  {C.GREEN}[3]{C.RESET}{C.BOLD}  Download Single URL                     │
-│  {C.GREEN}[4]{C.RESET}{C.BOLD}  Login & Browser                         │
-│  {C.GREEN}[5]{C.RESET}{C.BOLD}  Tools Update                            │
-│  {C.GREEN}[6]{C.RESET}{C.BOLD}  Open Output Folder                      │
-│  {C.GREEN}[0]{C.RESET}{C.BOLD}  Exit                                    │
-└───────────────────────────────────────────────┘{C.RESET}
-""")
-
-
-def _settings_rows(cfg):
-    """(heading, config key, [(value, label, blurb)]) for the current mode.
-
-    The mode row decides what the rows below it contain: audio has its own
-    format list and no resolution at all, so switching mode reshapes the screen
-    rather than leaving dead options on it.
-    """
-    rows = [("MODE", "mode",
-             [(v, _short_label("mode", v), blurb) for v, blurb in
-              (("video", "Video files, and the images in a post"),
-               ("audio", "Extract the audio track only"))])]
-
-    if cfg.get("mode", "video") == "audio":
-        rows.append(("FILE FORMAT", "audio_format",
-                     [(v, _short_label("audio_format", v), d)
-                      for v, d in AUDIO_FORMATS]))
-    else:
-        rows.append(("FILE FORMAT", "video_format",
-                     [(v, _short_label("video_format", v), d)
-                      for v, d in VIDEO_FORMATS]))
-        rows.append(("RESOLUTION", "resolution",
-                     [(v, _short_label("resolution", v), d)
-                      for v, d in RESOLUTION_OPTIONS]))
-    return rows
+    """Print the menu once, for terminals that cannot be driven interactively."""
+    layout = build_layout(cfg, login=login_source(), interactive=False,
+                          with_banner=False)
+    print()
+    for line in layout.lines:
+        print(line)
+    print(f"  {C.DIM}Type a number, or S to change the download settings.{C.RESET}\n")
 
 
 def _draw_settings(cfg):
-    """Render every setting on one screen. Returns {typed number: (key, value)}."""
+    """Typed settings screen — the fallback when there is no usable terminal.
+
+    The interactive menu edits these values in place; this exists so a piped or
+    redirected session can still reach them.
+    """
     print(f"\n  {C.BOLD}{C.CYAN}Download Settings{C.RESET}"
           f"   {C.DIM}pick one per row{C.RESET}")
     print(f"  {C.DIM}{'─' * 60}{C.RESET}")
 
     index = {}
     n = 0
-    for heading, key, options in _settings_rows(cfg):
+    for heading, key, options in settings_rows(cfg):
         current = cfg.get(key)
-        chosen = next((b for v, _, b in options if v == current), "")
-        print(f"\n  {C.CYAN}{heading}{C.RESET}  {C.DIM}{C.ITALIC}{chosen}{C.RESET}")
+        print(f"\n  {C.CYAN}{heading}{C.RESET}")
 
         # Cells carry colour codes, so pad on the plain text or the columns
         # drift apart as soon as anything is selected.
-        width = max(len(label) for _, label, _ in options) + 9
+        width = max(len(label) for _, label in options) + 9
         per_line = max(1, 68 // width)
         line, in_line = "", 0
-        for value, label, _ in options:
+        for value, label in options:
             n += 1
             index[str(n)] = (key, value)
             mark = (f"{C.GREEN}{MARK_ON}{C.RESET}" if value == current
@@ -140,10 +116,8 @@ def _draw_settings(cfg):
         if line.strip():
             print("    " + line.rstrip())
 
-    auto = "ON" if cfg.get("auto_update", True) else "OFF"
     print(f"\n  {C.DIM}{'─' * 60}{C.RESET}")
     print(f"  {C.GREEN}[o]{C.RESET} Output folder   "
-          f"{C.GREEN}[u]{C.RESET} Auto-update: {C.WHITE}{auto}{C.RESET}   "
           f"{C.GREEN}[e]{C.RESET} Edit urls.txt   {C.DIM}[0] Back{C.RESET}\n")
     return index
 
@@ -162,18 +136,13 @@ def download_settings(cfg):
 
         if choice in index:
             key, value = index[choice]
-            cfg[key] = value
-            save_config(cfg)
+            apply_setting(cfg, key, value)
             continue
 
         if choice == "o":
             change_output_folder(cfg)
-        elif choice == "u":
-            cfg["auto_update"] = not cfg.get("auto_update", True)
-            save_config(cfg)
-            log(f"Auto-update {'enabled' if cfg['auto_update'] else 'disabled'}", "OK")
         elif choice == "e":
-            open_path(URLS_FILE)
+            edit_urls()
         else:
             log("Not one of the options.", "WARN")
 
@@ -220,26 +189,6 @@ def change_output_folder(cfg):
         log(f"Output folder reset to default: {OUTPUT_DIR}", "OK")
 
 
-def prompt_resolution(url):
-    print(f"\n  {C.BOLD}{C.CYAN}Select Resolution for this download:{C.RESET}")
-    print(f"  {C.DIM}URL: {url[:80]}{'...' if len(url) > 80 else ''}{C.RESET}")
-    print(f"  {C.DIM}{'─' * 45}{C.RESET}")
-    for i, (_, label) in enumerate(RESOLUTION_OPTIONS, 1):
-        print(f"  {C.GREEN}[{i:>2}]{C.RESET} {label}")
-    print(f"  {C.DIM}[ 0] Use default (best){C.RESET}\n")
-    try:
-        choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
-        if not choice or choice == "0":
-            return "best"
-        idx = int(choice) - 1
-        if 0 <= idx < len(RESOLUTION_OPTIONS):
-            log(f"Resolution: {RESOLUTION_OPTIONS[idx][1]}", "OK")
-            return RESOLUTION_OPTIONS[idx][0]
-    except (ValueError, EOFError):
-        pass
-    return "best"
-
-
 # ── BATCH / SINGLE ───────────────────────────────────────────────────────────
 
 def process_batch(cfg):
@@ -251,23 +200,7 @@ def process_batch(cfg):
 
     total = len(urls)
     log(f"Found {total} URL(s) to process", "INFO")
-
-    batch_res = None
-    if cfg.get("mode", "video") == "video":
-        print(f"\n  {C.BOLD}Pick resolution for this batch (or Enter for default):{C.RESET}")
-        for i, (val, label) in enumerate(RESOLUTION_OPTIONS, 1):
-            marker = f" {C.GREEN}<- default{C.RESET}" if val == cfg.get("resolution", "best") else ""
-            print(f"  {C.GREEN}[{i:>2}]{C.RESET} {label}{marker}")
-        print(f"  {C.DIM}[Enter] Use default{C.RESET}\n")
-        try:
-            rc = input(f"  {C.CYAN}#{C.RESET} ").strip()
-            if rc:
-                idx = int(rc) - 1
-                if 0 <= idx < len(RESOLUTION_OPTIONS):
-                    batch_res = RESOLUTION_OPTIONS[idx][0]
-                    log(f"Batch resolution: {RESOLUTION_OPTIONS[idx][1]}", "OK")
-        except (ValueError, EOFError):
-            pass
+    log(f"Format: {format_status(cfg)}", "INFO")
 
     rule()
     log(stop_hint_text(), "INFO")
@@ -276,19 +209,24 @@ def process_batch(cfg):
     stopped = False
     for i, url in enumerate(urls, 1):
         try:
-            results.append(download_single(url, cfg, i, total, resolution_override=batch_res))
+            results.append(download_single(url, cfg, i, total))
         except DownloadStopped:
             log("Downloads stopped by user — remaining URLs kept in urls.txt.", "WARN")
             stopped = True
             break
         rule()
 
+    # Count against what was actually attempted: stopping half way through
+    # leaves the rest untouched in urls.txt, and calling those "failed" both
+    # reads as breakage and hides the real failures in the list below.
+    attempted = len(results)
     ok_count = sum(1 for _, ok, _ in results if ok)
-    fail_count = total - ok_count
+    fail_count = attempted - ok_count
 
     print(f"\n{C.BOLD}{'═' * 55}")
     print(f"  SUMMARY: {C.GREEN}{ok_count} succeeded{C.RESET}{C.BOLD}, "
-          f"{C.RED}{fail_count} failed{C.RESET}{C.BOLD} / {total} total")
+          f"{C.RED}{fail_count} failed{C.RESET}{C.BOLD} / {attempted} attempted"
+          + (f" ({total - attempted} not started)" if attempted < total else ""))
     print(f"{'═' * 55}{C.RESET}\n")
 
     if fail_count > 0:
@@ -308,12 +246,11 @@ def process_single(cfg):
         log("No URL entered.", "WARN")
         return
 
-    res_override = prompt_resolution(url) if cfg.get("mode", "video") == "video" else None
-
+    log(f"Format: {format_status(cfg)}", "INFO")
     rule()
     log(stop_hint_text(), "INFO")
     try:
-        download_single(url, cfg, 1, 1, resolution_override=res_override)
+        download_single(url, cfg, 1, 1)
     except DownloadStopped:
         log("Download stopped by user.", "WARN")
     rule()
@@ -406,50 +343,147 @@ def login_and_browser(cfg):
             log("Not one of the options.", "WARN")
 
 
-def main():
-    enable_ansi()
-    set_console_title("MediaGrabber")
-    init_logging(LOGS_DIR)
-    banner()
-    log(f"App directory: {CONFIG_FILE.parent}", "INFO")
-    log(f"Log file: {log_file()}", "INFO")
+def run_action(name, cfg):
+    """Perform one menu action. Returns True when the app should exit."""
+    if name == "single":
+        process_single(cfg)
+    elif name == "batch":
+        process_batch(cfg)
+    elif name == "edit":
+        edit_urls()
+    elif name == "login":
+        login_and_browser(cfg)
+    elif name == "update":
+        log("Forcing tool update...", "UPDATE")
+        run_updates(cfg, force=True)
+    elif name == "output":
+        open_path(cfg.get("output_dir", OUTPUT_DIR))
+    elif name == "folder":
+        change_output_folder(cfg)
+    elif name == "exit":
+        log("Exiting. Goodbye!", "INFO")
+        return True
+    return False
 
-    cfg = load_config()
-    Path(cfg.get("output_dir", OUTPUT_DIR)).mkdir(parents=True, exist_ok=True)
-    save_config(cfg)
 
-    if not URLS_FILE.exists():
-        read_urls()
-        log(f"Created urls.txt at {URLS_FILE}", "INFO")
+def _column_of(cfg, row):
+    """Which option in this settings row is the current value."""
+    _, key, values = row
+    try:
+        return values.index(cfg.get(key))
+    except ValueError:
+        return 0
 
-    log("Checking tools...", "HEADER")
-    if not run_updates(cfg):
-        log("Some tools could not be downloaded. Downloads may fail.", "ERROR")
-    print()
 
-    run_checkup(cfg, quick=True)
-    print()
+def _handle_event(cfg, layout, focus, event):
+    """Apply one keypress or click. Returns an action name, or None to redraw."""
+    rows = layout.rows
+    row = rows[focus["row"]]
 
-    actions = {
-        "1": lambda: download_settings(cfg),
-        "2": lambda: process_batch(cfg),
-        "3": lambda: process_single(cfg),
-        "4": lambda: login_and_browser(cfg),
-        "5": lambda: (log("Forcing tool update...", "UPDATE"),
-                      run_updates(cfg, force=True)),
-        "6": lambda: open_path(cfg.get("output_dir", OUTPUT_DIR)),
-    }
+    if event.kind == "mouse":
+        hit = hit_test(layout, event.x, event.y)
+        if hit is None:
+            return None
+        focus["row"], focus["col"] = hit.row, hit.col
+        kind, first, second = hit.target
+        if kind == "set":
+            apply_setting(cfg, first, second)
+            return None
+        return first
+
+    name = event.name
+
+    if name in ("up", "down"):
+        step = -1 if name == "up" else 1
+        focus["row"] = (focus["row"] + step) % len(rows)
+        new_row = rows[focus["row"]]
+        focus["col"] = _column_of(cfg, new_row) if new_row[0] == "settings" else 0
+        return None
+
+    if row[0] == "settings":
+        _, key, values = row
+        if name in ("left", "right", "enter", "space"):
+            step = -1 if name == "left" else 1
+            focus["col"] = (_column_of(cfg, row) + step) % len(values)
+            apply_setting(cfg, key, values[focus["col"]])
+            return None
+    elif name in ("enter", "space"):
+        return row[1]
+
+    if name in ("escape", "q"):
+        return "exit"
+
+    for number, action, _, _ in ACTIONS:
+        if name == number:
+            return action
+
+    return None
+
+
+def _choose_interactively(cfg, focus):
+    """Own the terminal until the user picks an action, then give it back.
+
+    Raw mode is left before anything runs, because a download scrolls its own
+    output and its Q-to-stop check reads the terminal the ordinary way.
+    """
+    with Screen() as scr:
+        while True:
+            layout = build_layout(cfg, focus["row"], focus["col"],
+                                  login=login_source())
+            scr.render(layout.lines)
+            event = scr.read_event()
+            if event is None:
+                continue
+            action = _handle_event(cfg, layout, focus, event)
+            if action:
+                return action
+
+
+def _interactive_loop(cfg):
+    focus = {"row": 0, "col": 0}
+    while True:
+        try:
+            action = _choose_interactively(cfg, focus)
+        except KeyboardInterrupt:
+            print()
+            log("Interrupted by user. Exiting.", "WARN")
+            return
+
+        print()
+        try:
+            if run_action(action, cfg):
+                return
+        except KeyboardInterrupt:
+            print()
+            log("Interrupted.", "WARN")
+        except Exception as e:
+            log(f"Unexpected error: {e}", "ERROR")
+            log(traceback.format_exc(), "ERROR")
+
+        try:
+            input(f"\n  {C.DIM}Press Enter to return to the menu...{C.RESET}")
+        except (EOFError, KeyboardInterrupt):
+            return
+
+
+def _typed_loop(cfg):
+    """The menu as it was: type a number, press Enter.
+
+    Used whenever stdin or stdout is not a terminal — piped input, redirected
+    output, CI. Nothing here may depend on raw mode.
+    """
+    by_number = {number: name for number, name, _, _ in ACTIONS}
 
     while True:
         try:
             show_menu(cfg)
-            choice = input(f"  {C.CYAN}>{C.RESET} ").strip()
+            choice = input(f"  {C.CYAN}>{C.RESET} ").strip().lower()
 
-            if choice in actions:
-                actions[choice]()
-            elif choice == "0":
-                log("Exiting. Goodbye!", "INFO")
-                break
+            if choice == "s":
+                download_settings(cfg)
+            elif choice in by_number:
+                if run_action(by_number[choice], cfg):
+                    break
             else:
                 log("Invalid choice, try again.", "WARN")
 
@@ -464,6 +498,40 @@ def main():
         except Exception as e:
             log(f"Unexpected error: {e}", "ERROR")
             log(traceback.format_exc(), "ERROR")
+
+
+def main():
+    enable_ansi()
+    set_console_title("MediaGrabber")
+    init_logging(LOGS_DIR)
+    banner()
+
+    cfg = load_config()
+    Path(cfg.get("output_dir", OUTPUT_DIR)).mkdir(parents=True, exist_ok=True)
+    save_config(cfg)
+
+    if not URLS_FILE.exists():
+        read_urls()
+
+    # Starting up has a lot to say and almost none of it is news. All of it
+    # still reaches the session log; the screen only hears about it when
+    # something is actually wrong.
+    print(f"  {C.DIM}Checking tools...{C.RESET}", end="", flush=True)
+    with quiet_output():
+        log(f"App directory: {CONFIG_FILE.parent}", "INFO")
+        log(f"Log file: {log_file()}", "INFO")
+        tools_ok = run_updates(cfg)
+        healthy = run_checkup(cfg, quick=True) and tools_ok
+    print("\r" + " " * 40 + "\r", end="")
+
+    if not healthy:
+        log(f"Startup found problems — details in {log_file()}", "WARN")
+        print()
+
+    if is_interactive():
+        _interactive_loop(cfg)
+    else:
+        _typed_loop(cfg)
 
     print()
 
