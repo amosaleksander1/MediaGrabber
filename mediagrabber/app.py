@@ -13,9 +13,11 @@ from .download import DownloadStopped, download_single
 from .nativehost import (CHROME_EXTENSION_ID, bridge_binary, register,
                          status, unregister)
 from .platform_support import (IS_WIN, OS_LABEL, PLATFORM_TAG, enable_ansi,
-                               open_path, pick_folder_dialog, stop_hint_text)
+                               open_path, pick_folder_dialog,
+                               set_console_title, stop_hint_text)
 from .tools import run_updates
-from .ui import C, banner, init_logging, log, log_file, pick_from_list, rule
+from .ui import (C, MARK_OFF, MARK_ON, banner, init_logging, log, log_file,
+                 rule)
 
 # ── URL FILE ─────────────────────────────────────────────────────────────────
 
@@ -44,15 +46,20 @@ def clear_urls():
 
 # ── SETTINGS SCREENS ─────────────────────────────────────────────────────────
 
+def _short_label(key, value):
+    """Compact name for the settings grid — the long blurb goes underneath."""
+    if key == "resolution":
+        return {"best": "Best", "worst": "Worst"}.get(value, f"{value}p")
+    if key == "mode":
+        return {"video": "Video / Image", "audio": "Audio"}.get(value, value)
+    return value.upper()
+
+
 def format_status(cfg):
-    mode = cfg.get("mode", "video")
-    if mode == "audio":
-        return f"AUDIO ({cfg.get('audio_format', 'mp3').upper()})"
-    if mode == "media":
-        return "MEDIA (images + video, whole post)"
-    res = cfg.get("resolution", "best")
-    res_label = res if res in ("best", "worst") else f"{res}p"
-    return f"VIDEO ({cfg.get('video_format', 'mp4').upper()} @ {res_label})"
+    if cfg.get("mode", "video") == "audio":
+        return f"Audio ({cfg.get('audio_format', 'mp3').upper()})"
+    res = _short_label("resolution", cfg.get("resolution", "best"))
+    return f"Video / Image ({cfg.get('video_format', 'mp4').upper()} @ {res})"
 
 
 def show_menu(cfg):
@@ -63,63 +70,112 @@ def show_menu(cfg):
 │  {C.CYAN}OUTPUT{C.RESET}{C.BOLD}:      {C.DIM}{cfg.get("output_dir", OUTPUT_DIR)}{C.RESET}{C.BOLD}
 │  {C.CYAN}PLATFORM{C.RESET}{C.BOLD}:    {C.DIM}{OS_LABEL} ({PLATFORM_TAG}){C.RESET}{C.BOLD}
 ├───────────────────────────────────────────────┤
-│  {C.GREEN}[1]{C.RESET}{C.BOLD}  Download from urls.txt                  │
-│  {C.GREEN}[2]{C.RESET}{C.BOLD}  Download single URL                     │
-│  {C.GREEN}[3]{C.RESET}{C.BOLD}  Change format (Video / Audio / Media)   │
-│  {C.GREEN}[4]{C.RESET}{C.BOLD}  Change resolution (Video only)          │
-│  {C.GREEN}[5]{C.RESET}{C.BOLD}  Change output folder                    │
-│  {C.GREEN}[6]{C.RESET}{C.BOLD}  Toggle auto-update                      │
-│  {C.GREEN}[7]{C.RESET}{C.BOLD}  Force update tools now                  │
-│  {C.GREEN}[8]{C.RESET}{C.BOLD}  Open output folder                      │
-│  {C.GREEN}[9]{C.RESET}{C.BOLD}  Open urls.txt for editing               │
-│  {C.GREEN}[10]{C.RESET}{C.BOLD} Checkup (tools + login)                 │
-│  {C.GREEN}[11]{C.RESET}{C.BOLD} Set login cookie browser                │
-│  {C.GREEN}[12]{C.RESET}{C.BOLD} Delete saved login cookies              │
-│  {C.GREEN}[13]{C.RESET}{C.BOLD} Connect browser extension               │
+│  {C.GREEN}[1]{C.RESET}{C.BOLD}  Download Settings                       │
+│  {C.GREEN}[2]{C.RESET}{C.BOLD}  Download Batch      {C.DIM}(from urls.txt){C.RESET}{C.BOLD}     │
+│  {C.GREEN}[3]{C.RESET}{C.BOLD}  Download Single URL                     │
+│  {C.GREEN}[4]{C.RESET}{C.BOLD}  Login & Browser                         │
+│  {C.GREEN}[5]{C.RESET}{C.BOLD}  Tools Update                            │
+│  {C.GREEN}[6]{C.RESET}{C.BOLD}  Open Output Folder                      │
 │  {C.GREEN}[0]{C.RESET}{C.BOLD}  Exit                                    │
 └───────────────────────────────────────────────┘{C.RESET}
 """)
 
 
-def choose_format(cfg):
-    print(f"\n  {C.BOLD}{C.CYAN}Choose Mode & Format{C.RESET}")
-    print(f"  {C.GREEN}[1]{C.RESET} Video formats")
-    print(f"  {C.GREEN}[2]{C.RESET} Audio formats")
-    print(f"  {C.GREEN}[3]{C.RESET} Media — every image and video in a post")
-    print(f"  {C.DIM}[0] Cancel{C.RESET}\n")
-    choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
+def _settings_rows(cfg):
+    """(heading, config key, [(value, label, blurb)]) for the current mode.
 
-    if choice == "1":
-        picked = pick_from_list("Video Formats", VIDEO_FORMATS, cfg.get("video_format"))
-        if picked:
-            cfg["mode"], cfg["video_format"] = "video", picked
+    The mode row decides what the rows below it contain: audio has its own
+    format list and no resolution at all, so switching mode reshapes the screen
+    rather than leaving dead options on it.
+    """
+    rows = [("MODE", "mode",
+             [(v, _short_label("mode", v), blurb) for v, blurb in
+              (("video", "Video files, and the images in a post"),
+               ("audio", "Extract the audio track only"))])]
+
+    if cfg.get("mode", "video") == "audio":
+        rows.append(("FILE FORMAT", "audio_format",
+                     [(v, _short_label("audio_format", v), d)
+                      for v, d in AUDIO_FORMATS]))
+    else:
+        rows.append(("FILE FORMAT", "video_format",
+                     [(v, _short_label("video_format", v), d)
+                      for v, d in VIDEO_FORMATS]))
+        rows.append(("RESOLUTION", "resolution",
+                     [(v, _short_label("resolution", v), d)
+                      for v, d in RESOLUTION_OPTIONS]))
+    return rows
+
+
+def _draw_settings(cfg):
+    """Render every setting on one screen. Returns {typed number: (key, value)}."""
+    print(f"\n  {C.BOLD}{C.CYAN}Download Settings{C.RESET}"
+          f"   {C.DIM}pick one per row{C.RESET}")
+    print(f"  {C.DIM}{'─' * 60}{C.RESET}")
+
+    index = {}
+    n = 0
+    for heading, key, options in _settings_rows(cfg):
+        current = cfg.get(key)
+        chosen = next((b for v, _, b in options if v == current), "")
+        print(f"\n  {C.CYAN}{heading}{C.RESET}  {C.DIM}{C.ITALIC}{chosen}{C.RESET}")
+
+        # Cells carry colour codes, so pad on the plain text or the columns
+        # drift apart as soon as anything is selected.
+        width = max(len(label) for _, label, _ in options) + 9
+        per_line = max(1, 68 // width)
+        line, in_line = "", 0
+        for value, label, _ in options:
+            n += 1
+            index[str(n)] = (key, value)
+            mark = (f"{C.GREEN}{MARK_ON}{C.RESET}" if value == current
+                    else f"{C.DIM}{MARK_OFF}{C.RESET}")
+            plain = f"[{n:>2}] {MARK_ON} {label}"
+            cell = f"{C.GREEN}[{n:>2}]{C.RESET} {mark} {label}"
+            line += cell + " " * max(1, width - len(plain))
+            in_line += 1
+            if in_line == per_line:
+                print("    " + line.rstrip())
+                line, in_line = "", 0
+        if line.strip():
+            print("    " + line.rstrip())
+
+    auto = "ON" if cfg.get("auto_update", True) else "OFF"
+    print(f"\n  {C.DIM}{'─' * 60}{C.RESET}")
+    print(f"  {C.GREEN}[o]{C.RESET} Output folder   "
+          f"{C.GREEN}[u]{C.RESET} Auto-update: {C.WHITE}{auto}{C.RESET}   "
+          f"{C.GREEN}[e]{C.RESET} Edit urls.txt   {C.DIM}[0] Back{C.RESET}\n")
+    return index
+
+
+def download_settings(cfg):
+    """Mode, format and resolution on one screen, redrawn after every change."""
+    while True:
+        index = _draw_settings(cfg)
+        try:
+            choice = input(f"  {C.CYAN}#{C.RESET} ").strip().lower()
+        except EOFError:
+            return
+
+        if choice in ("0", "", "b", "back"):
+            return
+
+        if choice in index:
+            key, value = index[choice]
+            cfg[key] = value
             save_config(cfg)
-            log(f"Format set to VIDEO ({picked.upper()})", "OK")
-    elif choice == "2":
-        picked = pick_from_list("Audio Formats", AUDIO_FORMATS, cfg.get("audio_format"))
-        if picked:
-            cfg["mode"], cfg["audio_format"] = "audio", picked
+            continue
+
+        if choice == "o":
+            change_output_folder(cfg)
+        elif choice == "u":
+            cfg["auto_update"] = not cfg.get("auto_update", True)
             save_config(cfg)
-            log(f"Format set to AUDIO ({picked.upper()})", "OK")
-    elif choice == "3":
-        cfg["mode"] = "media"
-        save_config(cfg)
-        log("Format set to MEDIA — pulls every image and video in a post", "OK")
-        log("Instagram, TikTok, X/Twitter, Reddit, Pinterest and Threads posts "
-            "are named from their caption; other sites are attempted too.", "INFO")
-
-
-def choose_resolution(cfg):
-    if cfg.get("mode") in ("audio", "media"):
-        log("Resolution only applies to video mode. Switch to video first.", "WARN")
-        return
-    picked = pick_from_list("Default Video Resolution", RESOLUTION_OPTIONS,
-                            cfg.get("resolution", "best"))
-    if picked:
-        cfg["resolution"] = picked
-        save_config(cfg)
-        log(f"Default resolution set to: "
-            f"{picked if picked in ('best', 'worst') else picked + 'p'}", "OK")
+            log(f"Auto-update {'enabled' if cfg['auto_update'] else 'disabled'}", "OK")
+        elif choice == "e":
+            open_path(URLS_FILE)
+        else:
+            log("Not one of the options.", "WARN")
 
 
 def change_output_folder(cfg):
@@ -309,8 +365,50 @@ def connect_extension(cfg):
             log(f"  {browser}: {detail}", "OK" if ok else "INFO")
 
 
+def login_and_browser(cfg):
+    """Everything about proving who you are to a site, in one place."""
+    while True:
+        source = "cached file" if COOKIES_FILE.exists() else "none saved"
+        print(f"\n  {C.BOLD}{C.CYAN}Login & Browser{C.RESET}")
+        print(f"  {C.DIM}{'─' * 45}{C.RESET}")
+        print(f"  Cookie browser: {C.WHITE}{cfg.get('cookies_browser', 'auto')}{C.RESET}"
+              f"   Saved login: {C.WHITE}{source}{C.RESET}\n")
+        print(f"  {C.GREEN}[1]{C.RESET} Set login cookie browser")
+        print(f"  {C.GREEN}[2]{C.RESET} Connect browser extension  "
+              f"{C.DIM}(hands your login over directly){C.RESET}")
+        print(f"  {C.GREEN}[3]{C.RESET} Checkup  {C.DIM}(tools + login){C.RESET}")
+        print(f"  {C.GREEN}[4]{C.RESET} Delete saved login cookies")
+        print(f"  {C.DIM}[0] Back{C.RESET}\n")
+        try:
+            choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
+        except EOFError:
+            return
+
+        if choice in ("0", ""):
+            return
+        if choice == "1":
+            choose_cookie_browser(cfg)
+        elif choice == "2":
+            connect_extension(cfg)
+        elif choice == "3":
+            run_checkup(cfg)
+        elif choice == "4":
+            if COOKIES_FILE.exists():
+                try:
+                    COOKIES_FILE.unlink()
+                    log("Saved login cookies deleted. They will be re-exported "
+                        "from your browser when next needed.", "OK")
+                except Exception as e:
+                    log(f"Could not delete cookie cache: {e}", "ERROR")
+            else:
+                log("No saved cookies to delete.", "INFO")
+        else:
+            log("Not one of the options.", "WARN")
+
+
 def main():
     enable_ansi()
+    set_console_title("MediaGrabber")
     init_logging(LOGS_DIR)
     banner()
     log(f"App directory: {CONFIG_FILE.parent}", "INFO")
@@ -333,17 +431,13 @@ def main():
     print()
 
     actions = {
-        "1": lambda: process_batch(cfg),
-        "2": lambda: process_single(cfg),
-        "3": lambda: choose_format(cfg),
-        "4": lambda: choose_resolution(cfg),
-        "5": lambda: change_output_folder(cfg),
-        "7": lambda: (log("Forcing tool update...", "UPDATE"), run_updates(cfg, force=True)),
-        "8": lambda: open_path(cfg.get("output_dir", OUTPUT_DIR)),
-        "9": lambda: open_path(URLS_FILE),
-        "10": lambda: run_checkup(cfg),
-        "11": lambda: choose_cookie_browser(cfg),
-        "13": lambda: connect_extension(cfg),
+        "1": lambda: download_settings(cfg),
+        "2": lambda: process_batch(cfg),
+        "3": lambda: process_single(cfg),
+        "4": lambda: login_and_browser(cfg),
+        "5": lambda: (log("Forcing tool update...", "UPDATE"),
+                      run_updates(cfg, force=True)),
+        "6": lambda: open_path(cfg.get("output_dir", OUTPUT_DIR)),
     }
 
     while True:
@@ -353,20 +447,6 @@ def main():
 
             if choice in actions:
                 actions[choice]()
-            elif choice == "6":
-                cfg["auto_update"] = not cfg.get("auto_update", True)
-                save_config(cfg)
-                log(f"Auto-update {'enabled' if cfg['auto_update'] else 'disabled'}", "OK")
-            elif choice == "12":
-                if COOKIES_FILE.exists():
-                    try:
-                        COOKIES_FILE.unlink()
-                        log("Saved login cookies deleted. They will be re-exported "
-                            "from your browser when next needed.", "OK")
-                    except Exception as e:
-                        log(f"Could not delete cookie cache: {e}", "ERROR")
-                else:
-                    log("No saved login cookies to delete.", "INFO")
             elif choice == "0":
                 log("Exiting. Goodbye!", "INFO")
                 break

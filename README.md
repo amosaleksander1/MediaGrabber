@@ -7,7 +7,7 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 ## Features
 
 - **Batch or single downloads** — queue links in `urls.txt` or paste one at a time
-- **Video, audio & media modes** — MP4/MKV/WebM/… video, MP3/FLAC/Opus/… audio, resolution capping, or **Media mode**: pull *every* image and video out of a post
+- **Two modes, one screen** — *Video / Image* (MP4/MKV/WebM/… with resolution capping, and the images in a post) or *Audio* (MP3/FLAC/Opus/…). Mode, format and resolution are all picked on one Download Settings screen rather than three separate menus
 - **Images, not just video** — posts on Instagram, TikTok, X/Twitter, Reddit, Pinterest and Threads are recognised, named from their caption, and downloaded whole. Image-only posts that yt-dlp cannot touch are picked up by gallery-dl automatically, on any site it supports
 - **Instagram & TikTok carousels** — detects real multi-item posts and downloads *all* slides (images **and** videos) into a subfolder named from the post caption (e.g. `pink ketemu butter yellow/`), with files named to match (`pink ketemu butter yellow - 01.jpg`). Single reels/posts download normally — no folder.
 - **Baked-in login** — borrows your existing browser session (no password stored), with a one-time cookie export so downloads work while the browser is open
@@ -93,7 +93,7 @@ Expect the first run to take a few minutes — ffmpeg alone is ~60–90 MB. Late
 
 ### Login on macOS
 
-Menu `[11]` picks the browser. macOS supports **Safari**, Zen, Firefox, Chrome, Edge, Brave, Vivaldi and Opera.
+Menu `[4]` → `[1]` picks the browser. macOS supports **Safari**, Zen, Firefox, Chrome, Edge, Brave, Vivaldi and Opera.
 
 - **Firefox / Zen** — read directly, no prompts. Easiest option, and what I would pick.
 - **Chrome / Edge / Brave / Vivaldi / Opera** — cookies are encrypted with a Keychain key ("Chrome Safe Storage"). macOS will show a **"wants to access your keychain"** prompt the first time; click **Always Allow**. If you deny it or it fails, MediaGrabber automatically retries by launching the browser headless and asking it to hand over its own cookies — no Keychain prompt on that path.
@@ -110,9 +110,9 @@ Cookies are exported once to `tools/cookies.txt` and reused, so downloads keep w
 | `"MediaGrabber" is damaged and can't be opened` | Quarantine flag, not damage: `xattr -dr com.apple.quarantine .` in the app folder. |
 | `zsh: bad CPU type in executable` | Wrong archive for your Mac (Intel build on Apple Silicon or vice versa). Download the other one. MediaGrabber also self-heals this for its *tools* by re-downloading them. |
 | `run.command` opens and closes instantly | Run it from Terminal instead (`./run.command`) to see the error, or check the newest file in `logs/`. |
-| Keychain prompt appears repeatedly | Click **Always Allow**, not **Allow**. Or switch to Firefox/Zen via menu `[11]`. |
+| Keychain prompt appears repeatedly | Click **Always Allow**, not **Allow**. Or switch to Firefox/Zen via menu `[4]` → `[1]`. |
 | Safari cookies come back empty | Full Disk Access for Terminal, then restart Terminal. |
-| Intel Mac: `gallery-dl` missing after install | The pip fallback needs `python3`: `xcode-select --install`, then menu `[7]`. |
+| Intel Mac: `gallery-dl` missing after install | The pip fallback needs `python3`: `xcode-select --install`, then menu `[5]`. |
 | Gatekeeper blocks a *tool* in `tools/` | Shouldn't happen — MediaGrabber clears quarantine on what it downloads. If it does: `xattr -dr com.apple.quarantine tools/`. |
 
 ---
@@ -168,14 +168,9 @@ Both use PyInstaller. A macOS build is native to whichever architecture you buil
 ## The menu
 
 ```
-[1]  Download from urls.txt        [7]  Force update tools now
-[2]  Download single URL           [8]  Open output folder
-[3]  Change format (Video/Audio/   [9]  Open urls.txt for editing
-     Media)
-[4]  Change resolution             [10] Checkup (tools + login)
-[5]  Change output folder          [11] Set login cookie browser
-[6]  Toggle auto-update            [12] Delete saved login cookies
-                                   [13] Connect browser extension
+[1]  Download Settings            [4]  Login & Browser
+[2]  Download Batch                [5]  Tools Update
+[3]  Download Single URL           [6]  Open Output Folder
 [0]  Exit
 ```
 
@@ -183,11 +178,11 @@ Both use PyInstaller. A macOS build is native to whichever architecture you buil
 
 Instagram rejects anonymous downloads, and scripted username/password logins get blocked (and break with 2FA). MediaGrabber instead **borrows the session cookies from a browser where you are already logged in**:
 
-1. Menu `[11]` — pick your browser.
+1. Menu `[4]` → `[1]` — pick your browser.
 2. The app exports your cookies **once** to `tools/cookies.txt`.
 3. All later downloads use the cached file, browser open or not. If the session expires, the checkup detects it, re-exports, and re-probes automatically.
 
-> ⚠️ `tools/cookies.txt` **is your live Instagram session**. Anyone with that file can act as your account. It is `.gitignore`d — never commit or share it. Use menu `[12]` to delete it at any time (it re-exports automatically when next needed).
+> ⚠️ `tools/cookies.txt` **is your live Instagram session**. Anyone with that file can act as your account. It is `.gitignore`d — never commit or share it. Use menu `[4]` → `[4]` to delete it at any time (it re-exports automatically when next needed).
 
 ## Browser extension (the easy way to log in)
 
@@ -197,13 +192,13 @@ Reading a browser's cookie jar from the outside means defeating its encryption �
 
 ### Setting it up
 
-1. In MediaGrabber, choose menu `[13]` → `[1]`. This registers the bridge for every browser it finds (per-user only — no admin rights, nothing system-wide).
+1. In MediaGrabber, choose menu `[4]` → `[2]` → `[1]`. This registers the bridge for every browser it finds (per-user only — no admin rights, nothing system-wide).
 2. Load the extension:
    - **Chromium** (Chrome, Edge, Brave, Vivaldi): `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick the `extension` folder. Chrome blocks sideloaded extensions installed any other way, so this is the supported route.
    - **Firefox**: install `MediaGrabber-extension-firefox.zip` from the release.
 3. Click the MediaGrabber toolbar icon → **Send my login to MediaGrabber**.
 
-The popup shows `connected to MediaGrabber v3.2.0` when the bridge is reachable. If it says otherwise, run menu `[13]` again — the registration records an absolute path, so **moving or renaming the app folder breaks the link**. `[13]` reports a stale path rather than failing silently.
+The popup shows `connected to MediaGrabber v3.3.0` when the bridge is reachable. If it says otherwise, run menu `[4]` → `[2]` again — the registration records an absolute path, so **moving or renaming the app folder breaks the link**. It reports a stale path rather than failing silently.
 
 You can also right-click any page or link → **Send this page to MediaGrabber**, which appends it to `urls.txt` for the next run.
 
@@ -220,11 +215,15 @@ Native messaging has no open port: the browser launches the bridge as a child pr
 
 ## Pulling images and media out of a post
 
-### Media mode
+### There is no mode to remember
 
-Menu `[3]` → `[3]` switches to **Media** mode, which treats a link as a *post* rather than a video: gallery-dl pulls every item it holds — images, videos, or a mix — instead of yt-dlp looking for a single video stream. Use it for image posts, photo carousels and mixed albums. Resolution settings do not apply (an image has no bitrate); switch back to Video mode for resolution capping.
+**Video / Image** mode handles both, and the app works out which is which before it downloads anything. Paste a photo post and you get the photo; paste a reel and you get the video at your chosen format and resolution. There is no "image mode" to switch to and forget about.
 
-In Video and Audio mode nothing changes, with one addition: when yt-dlp exhausts its retries on a link, gallery-dl is asked whether it can pull media from that post anyway. That is what rescues an image-only post you paste without switching modes. On a site gallery-dl has no extractor for, the attempt simply misses and the original error stands.
+It works by asking gallery-dl what a post actually contains first. If none of the items is a video, the post goes straight to gallery-dl — yt-dlp is never called, because there is nothing there for it to fetch. That is why a photo post no longer prints `ERROR: No video formats found!` on its way to succeeding.
+
+When the answer is unclear — an unfamiliar site, or a post whose items cannot be read — the post is treated as *possibly* holding video and yt-dlp goes first, exactly as before. Guessing "image" there would send a plain video to the wrong tool. If yt-dlp then finds nothing, gallery-dl still gets its turn, so an image-only post on an unrecognised site is still recovered.
+
+> Earlier versions had a separate **Media** mode for this. It was folded into Video / Image in v3.3.0, and a config still naming it is migrated automatically.
 
 ### Recognised post links
 
@@ -245,9 +244,10 @@ Only *post-shaped* links match — a profile, board or subreddit root is deliber
 
 Any recognised post is probed first (metadata only):
 
-1. **Single item** → downloaded normally into the output folder, standard naming. If yt-dlp cannot handle it (e.g. a single image post), gallery-dl takes over.
-2. **2+ items (real carousel)** → a subfolder is created, named from the first caption words (default 4 — `folder_name_words` in `config.json`; emojis, hashtags, mentions and links stripped; no caption → `instagram_<shortcode>`). **gallery-dl** downloads every slide — images and videos — into it, named `<folder name> - 01.jpg`, `- 02.mp4`, … instead of numeric media IDs.
-3. If gallery-dl fails, the app falls back to yt-dlp targeting the same folder.
+1. **One item, images only** → straight to gallery-dl, saved into the output folder under the caption name. yt-dlp is skipped entirely.
+2. **One item, video (or unknown)** → yt-dlp downloads it with your format and resolution. If it turns out there is no video after all, gallery-dl takes over.
+3. **2+ items (real carousel)** → a subfolder is created, named from the first caption words (default 4 — `folder_name_words` in `config.json`; emojis, hashtags, mentions and links stripped; no caption → `instagram_<shortcode>`). **gallery-dl** downloads every slide — images and videos — into it, named `<folder name> - 01.jpg`, `- 02.mp4`, … instead of numeric media IDs.
+4. If gallery-dl fails, the app falls back to yt-dlp targeting the same folder — and if that finds no video either, gallery-dl gets one more attempt before the link is called a failure.
 
 Regular links (YouTube etc.) are unaffected and go straight into the output folder, keeping `--recode-video` and your resolution setting.
 
@@ -270,10 +270,10 @@ Regular links (YouTube etc.) are unaffected and go straight into the output fold
 ## General troubleshooting
 
 **`HTTP redirect to login page`**
-Your cached session is missing or expired. Log into instagram.com in your chosen browser, then run menu `[10]`.
+Your cached session is missing or expired. Log into instagram.com in your chosen browser, then run menu `[4]` → `[3]`.
 
 **Carousel folder named `instagram_XXXX` instead of the caption**
-The post has no caption, or the metadata fetch failed (check the log for `No usable caption found`). Usually an auth issue — run menu `[10]`.
+The post has no caption, or the metadata fetch failed (check the log for `No usable caption found`). Usually an auth issue — run menu `[4]` → `[3]`.
 
 **Rate limiting / temporary blocks from Instagram**
 Space out large batches. Instagram throttles aggressive scraping per account.

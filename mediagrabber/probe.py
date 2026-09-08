@@ -2,6 +2,7 @@
 
 import json
 import re
+from collections import namedtuple
 
 from .cookies import cookie_args
 from .shell import run_quiet
@@ -43,6 +44,35 @@ LOGIN_SITE_RE = re.compile(
     r"|(?<![A-Za-z0-9-])(twitter|x)\.com|threads\.(net|com))",
     re.IGNORECASE,
 )
+
+
+#: What the probe learned about a post before anything is downloaded.
+PostInfo = namedtuple("PostInfo", "count caption has_video")
+
+#: Extensions gallery-dl reports for the items it would fetch. Anything not
+#: recognised leaves has_video undecided rather than guessing "image".
+VIDEO_EXTS = {"mp4", "mov", "webm", "mkv", "avi", "m4v", "flv", "ts", "3gp"}
+IMAGE_EXTS = {"jpg", "jpeg", "png", "webp", "gif", "heic", "avif", "bmp"}
+
+
+def _has_video(files):
+    """True/False if the post's items are known, None if they are not.
+
+    The distinction matters: a post that is certainly images-only can skip
+    yt-dlp entirely, but an *unknown* post must still be offered to yt-dlp or a
+    plain video would be downloaded by the wrong tool.
+    """
+    seen_any = False
+    for entry in files:
+        meta = entry[2] if len(entry) > 2 and isinstance(entry[2], dict) else {}
+        if meta.get("video_url"):
+            return True
+        ext = str(meta.get("extension", "")).lower()
+        if ext in VIDEO_EXTS:
+            return True
+        if ext in IMAGE_EXTS:
+            seen_any = True
+    return False if seen_any else None
 
 
 def needs_login(url):
@@ -110,13 +140,18 @@ def tiktok_video_id(url):
 
 
 def probe_post(url, cfg):
-    """Fetch post metadata only (no media). Returns (media_count, caption)."""
+    """Fetch post metadata only (no media).
+
+    Returns ``PostInfo(count, caption, has_video)``. ``has_video`` is None when
+    the probe could not tell — the caller must treat that as "maybe", not "no",
+    or a video post would be handed to the wrong downloader.
+    """
     if not gallerydl_available():
-        return (None, None)
+        return PostInfo(None, None, None)
     rc, out = run_quiet(gallerydl_command() + cookie_args(cfg) + ["-j", url],
                         timeout=90)
     if not out:
-        return (None, None)
+        return PostInfo(None, None, None)
 
     # gallery-dl -j prints a pretty JSON array, possibly preceded by warning
     # lines. Try decoding from each "[" until one parses.
@@ -131,10 +166,11 @@ def probe_post(url, cfg):
             data = candidate
             break
     if data is None:
-        return (None, None)
+        return PostInfo(None, None, None)
 
     # Entries are [msg_type, ...]; msg_type 3 = one downloadable file.
-    count = sum(1 for e in data if isinstance(e, list) and e and e[0] == 3)
+    files = [e for e in data if isinstance(e, list) and e and e[0] == 3]
+    count = len(files)
 
     def scan(obj):
         if isinstance(obj, dict):
@@ -153,7 +189,8 @@ def probe_post(url, cfg):
                     return r
         return None
 
-    return (count if count > 0 else None, scan(data))
+    return PostInfo(count if count > 0 else None, scan(data),
+                    _has_video(files))
 
 
 def post_base_name(url, caption, cfg):

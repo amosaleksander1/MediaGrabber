@@ -7,7 +7,7 @@ Public entry point:
 """
 
 APP_NAME = "MediaGrabber"
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.3.0"
 
 __all__ = ["APP_NAME", "APP_VERSION", "main"]
 

@@ -178,6 +178,28 @@ def stop_hint_text():
     return "Press Q to stop downloads" + ("" if IS_WIN else " (Q then Enter)")
 
 
+def set_console_title(title="MediaGrabber"):
+    """Name the terminal window.
+
+    Launching the binary directly leaves the window titled with the full path
+    to the executable, which is neither short nor recognisable in a taskbar.
+    RUN.bat sets a title too, but only when the app is started through it.
+    """
+    if IS_WIN:
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleTitleW(str(title))
+            return
+        except Exception:
+            pass  # fall through to the escape sequence
+    try:
+        # OSC 0 — understood by Windows Terminal and every POSIX terminal.
+        sys.stdout.write(f"\033]0;{title}\007")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
 def enable_ansi():
     """Turn on ANSI escape processing in legacy Windows consoles."""
     if IS_WIN:

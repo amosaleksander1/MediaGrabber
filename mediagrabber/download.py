@@ -140,9 +140,9 @@ def build_ytdlp_args(url, cfg, resolution_override=None, out_dir_override=None):
     mode = cfg.get("mode", "video")
     if mode == "audio":
         args += ["-x", "--audio-format", cfg.get("audio_format", "mp3")]
-    elif mode == "media" or carousel:
-        # Media mode and carousels both mix images with video — a strict video
-        # selector or --recode-video would fail on the image entries.
+    elif carousel:
+        # A carousel mixes images with video — a strict video selector or
+        # --recode-video would fail on the image entries.
         args += ["-f", "best"]
     else:
         args += ["--recode-video", cfg.get("video_format", "mp4")]
@@ -350,16 +350,23 @@ def _rescue(url, out_dir, cfg, tag, base_name, multi, gallerydl_tried,
     ``gallerydl_tried`` avoids asking gallery-dl twice about the same URL when
     media mode already had a go at it.
     """
-    if not multi:
-        if not gallerydl_tried:
-            log(f"{tag} Asking gallery-dl for this post...", "INFO")
-            ok, _ = download_gallerydl(url, Path(out_dir), cfg, tag,
-                                       base_name=base_name, single=True,
-                                       rescue=True)
-            if ok:
-                log(f"{tag} Completed via gallery-dl: {url}", "OK")
-                return (url, True, "OK (gallery-dl)")
+    # gallery-dl is the only tool here that can fetch images, so it gets its
+    # shot whether or not the post is a carousel. It used to be skipped for
+    # carousels outright, which left a photo-only carousel with no way back:
+    # gallery-dl misses once, yt-dlp reports "no video", and nothing retries.
+    # ``gallerydl_tried`` is what stops it running twice, not ``multi``.
+    if not gallerydl_tried:
+        log(f"{tag} Asking gallery-dl for this post...", "INFO")
+        ok, _ = download_gallerydl(url, Path(out_dir), cfg, tag,
+                                   base_name=base_name, single=not multi,
+                                   rescue=True)
+        if ok:
+            log(f"{tag} Completed via gallery-dl: {url}", "OK")
+            return (url, True, "OK (gallery-dl)")
 
+    if not multi:
+        # The embed page yields the one video behind a link; there is no such
+        # thing for a multi-item post.
         if re.search(r"tiktok\.com", url, re.IGNORECASE):
             if download_tiktok_embed(url, out_dir, cfg, tag, base_name=base_name):
                 log(f"{tag} Completed via embed workaround: {url}", "OK")
@@ -377,10 +384,8 @@ def download_single(url, cfg, index, total, resolution_override=None):
     max_attempts = cfg.get("max_retries", 3)
     out_dir = cfg.get("output_dir", OUTPUT_DIR)
 
-    media_mode = cfg.get("mode", "video") == "media"
-
     # Self-heal: a missing tool triggers an immediate forced update.
-    wants_gallerydl = media_mode or is_post_url(url)
+    wants_gallerydl = is_post_url(url)
     if not YTDLP_EXE.exists() or (wants_gallerydl and not gallerydl_available()):
         log(f"{tag} Required tool missing — updating tools now...", "WARN")
         run_updates(cfg, force=True)
@@ -393,31 +398,32 @@ def download_single(url, cfg, index, total, resolution_override=None):
     base_name = None
     if wants_gallerydl:
         log(f"{tag} Probing post metadata...", "INFO")
-        count, caption = probe_post(url, cfg)
+        count, caption, has_video = probe_post(url, cfg)
         base_name = post_base_name(url, caption, cfg)
         if count and count > 1:
             multi = True
             sub_dir = Path(out_dir) / base_name
             log(f"{tag} Post holds {count} items -> {base_name}", "OK")
             ok, n = download_gallerydl(url, sub_dir, cfg, tag, base_name=base_name)
+            gallerydl_tried = True
             if ok:
                 log(f"{tag} Completed: {n} file(s) -> {sub_dir.name}", "OK")
                 return (url, True, f"OK ({n} files in {sub_dir.name})")
             log(f"{tag} gallery-dl failed — falling back to yt-dlp", "WARN")
             out_dir = str(sub_dir)
-        elif media_mode:
-            # One item, but in media mode it is still gallery-dl's job: the
-            # item is often an image that yt-dlp cannot fetch at all.
-            # On a known post an error is worth showing; on any other link
-            # media mode is speculative, so a miss stays quiet.
+        elif has_video is False:
+            # The probe read this post's items and not one of them is a video,
+            # so yt-dlp has nothing here to fetch. Going straight to gallery-dl
+            # skips a request that could only fail, along with the alarming
+            # "No video formats found!" it prints on the way out.
+            log(f"{tag} Photo post — fetching the image(s) with gallery-dl", "INFO")
             ok, n = download_gallerydl(url, Path(out_dir), cfg, tag,
-                                       base_name=base_name, single=True,
-                                       rescue=not is_post_url(url))
+                                       base_name=base_name, single=True)
             gallerydl_tried = True
             if ok:
                 log(f"{tag} Completed: {n} file(s)", "OK")
                 return (url, True, f"OK ({n} file(s) via gallery-dl)")
-            log(f"{tag} gallery-dl got nothing — trying yt-dlp", "WARN")
+            log(f"{tag} gallery-dl got nothing — trying yt-dlp anyway", "WARN")
         else:
             log(f"{tag} Single post — downloading normally", "INFO")
 

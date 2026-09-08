@@ -137,6 +137,13 @@ def load_config():
                 cfg.update(json.load(f))
         except Exception:
             pass
+
+    # v3.3 folded the old "media" mode into Video/Image, which now fetches
+    # whatever a post holds. A config saved before that would otherwise select
+    # a mode nothing knows about, leaving the app with no working format.
+    if cfg.get("mode") not in ("video", "audio"):
+        cfg["mode"] = "video"
+
     return cfg
 
 

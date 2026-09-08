@@ -1,6 +1,7 @@
 """Terminal output: colours, logging, banner, pickers, menu."""
 
 import datetime
+import sys
 from pathlib import Path
 
 from . import APP_VERSION
@@ -11,6 +12,8 @@ class C:
     RESET = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
+    # Legacy cmd.exe ignores italic; the dim it is paired with still reads.
+    ITALIC = "\033[3m"
     RED = "\033[91m"
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
@@ -18,6 +21,22 @@ class C:
     MAGENTA = "\033[95m"
     CYAN = "\033[96m"
     WHITE = "\033[97m"
+
+
+def _renderable(text):
+    """Can this console encode these characters at all?"""
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(enc)
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+#: Selected / unselected marks for the settings screen. These are radio
+#: buttons, not checkboxes — mode, format and resolution are each one-of-N —
+#: so a filled box means "this one", never "also this one".
+MARK_ON, MARK_OFF = ("▣", "▢") if _renderable("▣▢") else ("(*)", "( )")
 
 
 _LOG_FILE = None
@@ -59,11 +78,21 @@ def log(msg, level="INFO", color=None):
 
 
 def banner():
-    title = f"MediaGrabber v{APP_VERSION}"
+    name = f"MediaGrabber v{APP_VERSION}"
+    byline = "by Amos Aleksander"
     sub = f"{OS_LABEL} · {PLATFORM_TAG}"
+
+    # Centre on the *visible* text: the colour escapes carry no width, so
+    # measuring the finished string would push the box crooked.
+    plain = f"{name}   {byline}"
+    left = " " * ((54 - len(plain)) // 2)
+    right = " " * (54 - len(plain) - len(left))
+    titled = (f"{left}{C.WHITE}{name}{C.RESET}{C.BOLD}{C.CYAN}   "
+              f"{C.DIM}{C.ITALIC}{byline}{C.RESET}{C.BOLD}{C.CYAN}{right}")
+
     print(f"""
 {C.BOLD}{C.CYAN}╔══════════════════════════════════════════════════════╗
-║{C.WHITE}{title.center(54)}{C.CYAN}║
+║{titled}║
 ║{C.RESET}{C.DIM}{sub.center(54)}{C.CYAN}{C.BOLD}║
 ║{"Portable Media Downloader + Auto-Update".center(54)}║
 ╚══════════════════════════════════════════════════════╝{C.RESET}
