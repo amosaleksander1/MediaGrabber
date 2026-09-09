@@ -302,11 +302,22 @@ def check_naming(fail):
     if "DblkhUwAYDz" not in no_caption:
         fail(f"a captionless post must stay identifiable, got {no_caption!r}")
 
-    # Nothing may contain a character Windows rejects in a filename.
-    for bad in '<>:"/|?*':
+    # Nothing may contain a character Windows rejects in a filename, and
+    # braces must go too: this name is handed to gallery-dl as a format string
+    # ("{base} - {num:>02}.{extension}"), so a brace in a channel's display
+    # name would be read as a field to substitute rather than text to write.
+    for bad in '<>:"/|?*{}':
         probe = build_name(ig, f"we{bad}ird", f"cap{bad}tion here now please")
         if bad in probe:
             fail(f"{bad!r} survived into the filename {probe!r}")
+
+    # The property that actually matters: the finished name survives being
+    # used as the format string it will become.
+    hostile = build_name(yt, "Weird {num} Channel", "caption {extension} here")
+    try:
+        (hostile + " - {num:>02}.{extension}").format(num=1, extension="jpg")
+    except (KeyError, IndexError, ValueError) as e:
+        fail(f"name {hostile!r} breaks gallery-dl's filename template: {e}")
 
 
 def check_rename_applies_naming(fail):

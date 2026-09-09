@@ -19,7 +19,7 @@ from .platform_support import (copy_path_hint, enable_ansi,
                                pick_folder_dialog, set_console_title,
                                stop_hint_text)
 from .screen import Screen, is_interactive
-from .tools import run_updates
+from .tools import run_updates, tools_present
 from .ui import (C, MARK_OFF, MARK_ON, banner, init_logging, log, log_file,
                  quiet_output, rule)
 
@@ -496,10 +496,24 @@ def main():
     if not URLS_FILE.exists():
         read_urls()
 
+    # Setup comes before the tools, not after. On a genuinely new install the
+    # other order means several minutes of silent downloading, then a cookie
+    # export against whatever browser was guessed — which on macOS can raise a
+    # Keychain prompt — and only then "welcome, three quick questions". Asking
+    # first means the wait is explained and the browser is the user's choice
+    # by the time anything tries to read a login from it.
+    if needs_setup(cfg) and is_interactive():
+        run_setup(cfg)
+
     # Starting up has a lot to say and almost none of it is news. All of it
     # still reaches the session log; the screen only hears about it when
     # something is actually wrong.
-    print(f"  {C.DIM}Checking tools...{C.RESET}", end="", flush=True)
+    first_time = not tools_present()
+    print(f"  {C.DIM}"
+          + ("Getting the downloaders ready — this first run fetches about "
+             "250 MB, so give it a minute..." if first_time
+             else "Checking tools...")
+          + f"{C.RESET}", end="", flush=True)
     with quiet_output():
         log(f"App directory: {CONFIG_FILE.parent}", "INFO")
         log(f"Log file: {log_file()}", "INFO")
@@ -507,16 +521,13 @@ def main():
         # surfaced on the menu instead, where it stays visible.
         tools_ok = run_updates(cfg, interactive=False)
         healthy = run_checkup(cfg, quick=True) and tools_ok
-    print("\r" + " " * 40 + "\r", end="")
+    print("\r" + " " * 90 + "\r", end="")
 
     # Carried into the menu rather than printed here: the first repaint starts
     # at the top of the window and would paint over anything printed first.
     problem = None
     if not healthy:
         problem = f"Startup found problems — see {log_file()}"
-
-    if needs_setup(cfg) and is_interactive():
-        run_setup(cfg)
 
     if is_interactive():
         _interactive_loop(cfg, problem)

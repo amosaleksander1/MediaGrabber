@@ -31,8 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mediagrabber import app                                    # noqa: E402
 from mediagrabber.config import DEFAULTS                        # noqa: E402
-from mediagrabber.menu import (ACTIONS, build_layout, hit_test,  # noqa: E402
-                               navigable_rows, plain, settings_rows)
+from mediagrabber.menu import (ACTIONS, build_layout, build_panel,  # noqa: E402
+                               hit_test, navigable_rows, plain,
+                               settings_rows)
 from mediagrabber.screen import Event, decode_escape             # noqa: E402
 
 
@@ -274,6 +275,75 @@ def check_fallback(fail):
         fail("the piped menu must not render a focus highlight")
 
 
+
+def check_panels(fail):
+    """The wizard and the browser picker are a second layout, so guard them too.
+
+    They share the row emitters with the main menu, which is the whole point of
+    that sharing — but they arrange their own lines, so the click map can still
+    come apart independently. The browser picker is the one that matters: nine
+    options wrap onto several rows at any normal width, and a wrap the layout
+    did not account for is exactly what sends a click to the wrong option.
+    """
+    from mediagrabber.firstrun import _browser_options
+
+    options, _ = _browser_options()
+    if len(options) < 8:
+        fail(f"expected the browser picker to wrap; only {len(options)} options")
+
+    groups = [("Browser", "cookies_browser", options)]
+    actions = [("ok", "Use this browser", ""), ("cancel", "Skip for now", "")]
+    note = ("A note long enough to wrap onto a second line so the layout has "
+            "to account for it when it decides what fits on this screen.")
+
+    for width in (60, 80, 120):
+        for height in (25, 40):
+            where = f"[panel {width}x{height}]"
+            panel = build_panel("Which browser do you use?", note, groups,
+                                actions, {"cookies_browser": "zen"},
+                                width=width, height=height)
+
+            for y, line in enumerate(panel.lines):
+                if len(plain(line)) > width:
+                    fail(f"{where} line {y} is {len(plain(line))} wide")
+
+            for want in panel.hits:
+                for x in (want.x0, want.x1):
+                    got = hit_test(panel, x, want.y)
+                    if got is None or got.target != want.target:
+                        fail(f"{where} click ({x}, {want.y}) gave "
+                             f"{got.target if got else None}, "
+                             f"wanted {want.target}")
+
+            by_line = {}
+            for hit in panel.hits:
+                by_line.setdefault(hit.y, []).append(hit)
+            for y, hits in by_line.items():
+                ordered = sorted(hits, key=lambda h: h.x0)
+                for left, right in zip(ordered, ordered[1:]):
+                    if left.x1 >= right.x0:
+                        fail(f"{where} line {y}: {left.target} overlaps "
+                             f"{right.target}")
+
+            # Every browser must remain selectable, and both actions reachable.
+            for value, _ in options:
+                if not any(h.target == ("set", "cookies_browser", value)
+                           for h in panel.hits):
+                    fail(f"{where} {value!r} is drawn but not clickable")
+            for name, _, _ in actions:
+                if not any(h.target == ("action", name, None)
+                           for h in panel.hits):
+                    fail(f"{where} action {name} is unreachable")
+
+    # The rows a panel reports must match what it drew, or the arrow keys walk
+    # a different list from the one on screen.
+    panel = build_panel("t", "", groups, actions, {"cookies_browser": "zen"},
+                        width=80, height=40)
+    kinds = [r[0] for r in panel.rows]
+    if kinds != ["settings", "action", "action"]:
+        fail(f"panel rows are {kinds}, expected one settings row then two actions")
+
+
 def main():
     failures = []
     fail = failures.append
@@ -281,13 +351,15 @@ def main():
     check_decoding(fail)
     check_hit_boxes(fail)
     check_fits_the_window(fail)
+    check_panels(fail)
     check_mode_reshapes(fail)
     check_navigation(fail)
     check_fallback(fail)
 
     print("Checked escape/mouse decoding, every option's click box in both "
           "modes at three widths, fitting into a 25-row window, row "
-          "reshaping, focus movement and the piped fallback.")
+          "reshaping, focus movement, the wizard/browser panels and the "
+          "piped fallback.")
     print("=" * 60)
     if failures:
         print("FAILURES:")

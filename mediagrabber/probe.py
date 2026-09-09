@@ -163,7 +163,10 @@ def clean_address(address, url=None):
     # Stripped here and re-added below, so a source that already includes
     # the @ and one that does not both end up with exactly one.
     text = re.sub(r"^@+", "", text)
-    text = re.sub(r'[<>:"/\|?*]', "", text)     # illegal on Windows
+    # Braces go too, not only the Windows-illegal set: this name is handed
+    # to gallery-dl as a format string ({num}, {extension}), so a brace in
+    # a channel's display name would be read as a field instead of written.
+    text = re.sub(r'[<>:"/\|?*{}]', "", text)
     text = re.sub(r"\s+", " ", text).strip(" .-")
     text = text[:MAX_ADDRESS_CHARS].strip(" .-")
     if not text:
