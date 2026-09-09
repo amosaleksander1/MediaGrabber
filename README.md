@@ -9,8 +9,9 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 - **Batch or single downloads** — queue links in `urls.txt` or paste one at a time
 - **Click-and-arrow menu** — mode, format and resolution sit on the main screen as rows of radio buttons you arrow through or click, and the screen redraws in place instead of scrolling away. Falls back to the plain numbered menu when there is no real terminal
 - **Two modes** — *Video / Image* (MP4/MKV/WebM/… with resolution capping, and the images in a post) or *Audio* (MP3/FLAC/Opus/…). Choosing Audio reshapes the screen: the audio formats replace the video ones and the resolution row disappears
-- **Images, not just video** — posts on Instagram, TikTok, X/Twitter, Reddit, Pinterest and Threads are recognised, named from their caption, and downloaded whole. Image-only posts that yt-dlp cannot touch are picked up by gallery-dl automatically, on any site it supports
-- **Instagram & TikTok carousels** — detects real multi-item posts and downloads *all* slides (images **and** videos) into a subfolder named from the post caption (e.g. `pink ketemu butter yellow/`), with files named to match (`pink ketemu butter yellow - 01.jpg`). Single reels/posts download normally — no folder.
+- **Images, not just video** — posts on Instagram, TikTok, X/Twitter, Reddit, Pinterest and Threads are recognised, named after the account and caption, and downloaded whole. Image-only posts that yt-dlp cannot touch are picked up by gallery-dl automatically, on any site it supports
+- **Names you can read** — every download is `[Address] - [Caption]`: `@pinkbutter - pink ketemu butter yellow.jpg`, `Rick Astley - Never Gonna Give You Up.mp4`. The account keeps posts from different people apart; the caption keeps posts from the same person apart.
+- **Instagram & TikTok carousels** — detects real multi-item posts and downloads *all* slides (images **and** videos) into a subfolder, with every slide numbered in order and sharing the folder's name (`@pinkbutter - pink ketemu butter yellow - 01.jpg`, `- 02.mp4`, …). Single reels/posts download normally — no folder.
 - **Baked-in login** — borrows your existing browser session (no password stored), with a one-time cookie export so downloads work while the browser is open
 - **Optional browser extension** — hands your login straight to the app, skipping cookie decryption entirely (no Keychain prompt, no Full Disk Access, no closing the browser), and sends the page you are looking at to the download queue
 - **Self-maintaining** — yt-dlp, ffmpeg, Deno and gallery-dl are auto-downloaded for *your* platform and architecture; update checks run at most every 14 days (or when a tool breaks), so startup is instant
@@ -262,7 +263,19 @@ These are probed for their item count and named from their caption:
 | Pinterest | `pinterest.*/pin/…`, `pin.it/…` |
 | Threads | `threads.net/@user/post/…` |
 
-Only *post-shaped* links match — a profile, board or subreddit root is deliberately not treated as a post, so one link can never turn into a mass download. A post with no readable caption falls back to a name derived from the link (`reddit_pics_1abc2d`, `twitter_nasa_1889…`).
+Only *post-shaped* links match — a profile, board or subreddit root is deliberately not treated as a post, so one link can never turn into a mass download.
+
+### How a name is built
+
+`[Address] - [Caption]`, with each half capped so the result still fits inside a Windows path once the output folder is added:
+
+| Part | Rule |
+|---|---|
+| Address | The account: `@handle` on Instagram, TikTok, X and Threads; the plain channel name on YouTube. Max 20 characters. |
+| Caption | First 5 words. Emojis, hashtags, mentions and links are stripped. |
+| Carousel item | ` - 01`, ` - 02`, … appended in post order, sharing the folder's name. |
+
+Either half can be missing and the name still works: no caption falls back to the post's own id (`@pinkbutter - DblkhUwAYDz`), no address falls back to the caption alone, and neither leaves the link-derived name (`reddit_pics_1abc2d`).
 
 ### What happens to a post link
 
@@ -270,7 +283,7 @@ Any recognised post is probed first (metadata only):
 
 1. **One item, images only** → straight to gallery-dl, saved into the output folder under the caption name. yt-dlp is skipped entirely.
 2. **One item, video (or unknown)** → yt-dlp downloads it with your format and resolution. If it turns out there is no video after all, gallery-dl takes over.
-3. **2+ items (real carousel)** → a subfolder is created, named from the first caption words (default 4 — `folder_name_words` in `config.json`; emojis, hashtags, mentions and links stripped; no caption → `instagram_<shortcode>`). **gallery-dl** downloads every slide — images and videos — into it, named `<folder name> - 01.jpg`, `- 02.mp4`, … instead of numeric media IDs.
+3. **2+ items (real carousel)** → a subfolder is created, named `[Address] - [Caption]`. **gallery-dl** downloads every slide — images and videos — into it, numbered in order and sharing the folder's name: `- 01.jpg`, `- 02.mp4`, … instead of numeric media IDs.
 4. If gallery-dl fails, the app falls back to yt-dlp targeting the same folder — and if that finds no video either, gallery-dl gets one more attempt before the link is called a failure.
 
 Regular links (YouTube etc.) are unaffected and go straight into the output folder, keeping `--recode-video` and your resolution setting.
@@ -289,7 +302,7 @@ Regular links (YouTube etc.) are unaffected and go straight into the output fold
 | `auto_update` | `true` | update tools on startup |
 | `max_retries` | `3` | retry count for transient errors |
 | `cookies_browser` | `auto` | `zen`, `firefox`, `chrome`, `edge`, `brave`, `vivaldi`, `opera`, `safari` (macOS), `auto`, `none` |
-| `folder_name_words` | `4` | caption words used for carousel folder names |
+| `folder_name_words` | `5` | caption words kept in a name (a config still on the old `4` is moved to `5`) |
 
 ## General troubleshooting
 

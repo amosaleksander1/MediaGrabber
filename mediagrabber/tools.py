@@ -11,11 +11,13 @@ import sys
 import tarfile
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config import (DENO_EXE, FFMPEG_EXE, FFPROBE_EXE, GALLERYDL_EXE,
                      TOOLS_DIR, UPDATE_INTERVAL_DAYS, YTDLP_EXE,
-                     load_versions, save_versions)
-from .net import download_file, fetch_json, resolve_redirect
+                     load_versions, update_versions)
+from .net import (download_file, fetch_json, resolve_redirect,
+                  set_progress)
 from .platform_support import (ARCH, IS_MAC, IS_WIN, macos_version,
                                prepare_binary)
 from .shell import run_quiet
@@ -100,8 +102,7 @@ def update_ytdlp():
         log(f"Updating yt-dlp: {local_ver} -> {remote_ver}", "UPDATE")
         if download_file(ytdlp_download_url(), YTDLP_EXE, YTDLP_EXE.name):
             prepare_binary(YTDLP_EXE)
-            versions["yt-dlp"] = remote_ver
-            save_versions(versions)
+            update_versions(**{"yt-dlp": remote_ver})
             return True
         return False
     except Exception as e:
@@ -161,8 +162,7 @@ def _update_ffmpeg_macos(versions):
                 pass
 
     if got == 2:
-        versions["ffmpeg"] = remote_ver
-        save_versions(versions)
+        update_versions(ffmpeg=remote_ver)
         log(f"ffmpeg updated to {remote_ver}", "OK")
         return True
     return FFMPEG_EXE.exists() and FFPROBE_EXE.exists()
@@ -240,8 +240,7 @@ def _update_ffmpeg_btbn(versions):
             pass
 
     if extracted:
-        versions["ffmpeg"] = remote_ver
-        save_versions(versions)
+        update_versions(ffmpeg=remote_ver)
         log(f"ffmpeg updated to {remote_ver}", "OK")
         return True
     log("Could not find ffmpeg in the archive", "ERROR")
@@ -308,8 +307,7 @@ def update_deno():
                 pass
 
         if extracted:
-            versions["deno"] = remote_ver
-            save_versions(versions)
+            update_versions(deno=remote_ver)
             log(f"Deno updated to {remote_ver}", "OK")
             return True
         log("Could not find the deno binary in the archive", "ERROR")
@@ -435,8 +433,7 @@ def update_gallerydl():
 
         if download_file(asset_url, GALLERYDL_EXE, GALLERYDL_EXE.name):
             prepare_binary(GALLERYDL_EXE)
-            versions["gallery-dl"] = remote_ver
-            save_versions(versions)
+            update_versions(**{"gallery-dl": remote_ver})
             return True
         return GALLERYDL_EXE.exists()
     except Exception as e:
@@ -497,12 +494,59 @@ def run_updates(cfg, force=False):
             log(f"macOS {mv[0]}.{mv[1]} detected — the official yt-dlp macOS "
                 "build requires macOS 12+. Downloads may fail.", "WARN")
 
-    ok = True
-    for fn in (update_ytdlp, update_ffmpeg, update_deno, update_gallerydl):
-        if not fn():
-            ok = False
+    results = update_all()
+    update_versions(_last_check=time.time())
+    return all(results.values())
 
-    versions = load_versions()
-    versions["_last_check"] = time.time()
-    save_versions(versions)
-    return ok
+
+#: Every bundled tool and the function that fetches it. Order is only used for
+#: the closing summary; they all start at once.
+def _updaters():
+    return (("yt-dlp", update_ytdlp),
+            ("ffmpeg", update_ffmpeg),
+            ("deno", update_deno),
+            ("gallery-dl", update_gallerydl))
+
+
+def _safely(name, fn):
+    """One tool failing must not take the other three down with it."""
+    try:
+        return bool(fn())
+    except Exception as e:
+        log(f"{name} update raised: {e}", "ERROR")
+        return False
+
+
+def update_all():
+    """Fetch every tool at once rather than one after another.
+
+    The wait here is network, not CPU — four independent HTTP downloads that
+    each spend their time blocked on a socket. Threads turn four waits into
+    one, which on a slow connection is the difference between a minute of
+    staring at a progress bar and a few seconds.
+
+    Three things make it safe, and each is arranged elsewhere rather than here:
+    the version file is written through ``update_versions()``, which re-reads
+    and merges under a lock (four threads doing load-modify-write on one file
+    would silently drop entries); ``log()`` holds a lock across its print, so
+    messages cannot interleave mid-line; and the live byte counter is switched
+    off for the duration, because a line redrawn with a carriage return assumes
+    it owns the bottom of the terminal and four of them do not.
+
+    Returns {tool name: succeeded}.
+    """
+    results = {}
+    had_progress = set_progress(False)
+    try:
+        updaters = _updaters()
+        with ThreadPoolExecutor(max_workers=len(updaters)) as pool:
+            pending = {pool.submit(_safely, name, fn): name
+                       for name, fn in updaters}
+            for future in as_completed(pending):
+                name = pending[future]
+                results[name] = future.result()
+                log(f"  {name}: {'ready' if results[name] else 'failed'}",
+                    "OK" if results[name] else "ERROR")
+    finally:
+        set_progress(had_progress)
+    return results

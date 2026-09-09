@@ -13,7 +13,8 @@ from .config import (BROWSER_UA, DENO_EXE, NO_VIDEO_MARKERS, OUTPUT_DIR,
 from .cookies import cookie_args
 from .platform_support import stop_requested
 from .probe import (is_carousel_candidate, is_post_url, needs_login,
-                    post_base_name, probe_post, tiktok_video_id)
+                    post_base_name, probe_post, tiktok_video_id,
+                    build_name, MAX_CAPTION_WORDS)
 from .shell import popen_stream, stop_process
 from .tools import (gallerydl_available, gallerydl_command, repair_gallerydl,
                     run_updates)
@@ -25,10 +26,17 @@ class DownloadStopped(Exception):
 
 
 # ── FILE NAMING ──────────────────────────────────────────────────────────────
-# yt-dlp writes to a temp name carrying the playlist index, so carousel items
-# with identical titles never collide and can be renamed deterministically.
+# yt-dlp writes to a temp name carrying the uploader and the playlist index.
+# The index keeps carousel items with identical titles from colliding; the
+# uploader is here because "first five words of the title" cannot be expressed
+# in a yt-dlp output template, so the final name is built in rename_temp_files
+# instead — and by then the only thing that knows the channel is the filename.
+# The title leads so the name never begins with a dot: a template whose first
+# field is empty would produce a hidden file that the cleanup glob misses.
 
-_TMP_RE = re.compile(r"^(?P<title>.+)\.__MGIDX_(?P<idx>\d*)__\._MGTMP_\.(?P<ext>.+)$")
+_TMP_RE = re.compile(
+    r"^(?P<title>.+)\.__MGA_(?P<addr>.*?)__MGI_(?P<idx>\d*)__\._MGTMP_\.(?P<ext>.+)$"
+)
 
 
 def unique_path(parent, name):
@@ -52,10 +60,16 @@ def _safe_rename(filepath, target_name=None, target_dir=None):
     return final
 
 
-def rename_temp_files(out_dir):
-    """Strip temp markers from finished downloads; auto-number collisions."""
+def rename_temp_files(out_dir, url="", words=MAX_CAPTION_WORDS):
+    """Turn finished downloads into "[Address] - [Title]"; number collisions.
+
+    yt-dlp wrote the channel and the full title into the temp name; the naming
+    policy lives in one place, so it is applied here rather than duplicated
+    into an output template that could not express it anyway.
+    """
     out = Path(out_dir)
-    tmp_files = sorted(out.glob("*.__MGIDX_*__._MGTMP_.*")) + sorted(out.glob("*._MGTMP_.*"))
+    tmp_files = (sorted(out.glob("*.__MGA_*__MGI_*__._MGTMP_.*"))
+                 + sorted(out.glob("*._MGTMP_.*")))
     seen = set()
     tmp_files = [t for t in tmp_files if not (t in seen or seen.add(t))]
 
@@ -63,14 +77,16 @@ def rename_temp_files(out_dir):
     for tmp in tmp_files:
         m = _TMP_RE.match(tmp.name)
         if m:
-            parsed.append((tmp, m.group("title"), int(m.group("idx") or 0), m.group("ext")))
+            parsed.append((tmp, m.group("title"), m.group("addr"),
+                           int(m.group("idx") or 0), m.group("ext")))
         else:
             parsed.append((tmp, tmp.name.replace("._MGTMP_.", ".", 1).rsplit(".", 1)[0],
-                           0, tmp.suffix.lstrip(".")))
+                           "", 0, tmp.suffix.lstrip(".")))
 
     renamed = []
-    for tmp, title, idx, ext in sorted(parsed, key=lambda it: (it[1], it[2])):
-        name = f"{title} - {idx:02d}.{ext}" if idx > 0 else f"{title}.{ext}"
+    for tmp, title, addr, idx, ext in sorted(parsed, key=lambda it: (it[1], it[3])):
+        stem = build_name(url or "", addr, title, max_words=words) if title else title
+        name = f"{stem} - {idx:02d}.{ext}" if idx > 0 else f"{stem}.{ext}"
         renamed.append(_safe_rename(tmp, target_name=name))
     return renamed
 
@@ -121,7 +137,8 @@ def build_ytdlp_args(url, cfg, resolution_override=None, out_dir_override=None):
 
     out_dir = out_dir_override or cfg.get("output_dir", OUTPUT_DIR)
     args += ["-P", str(out_dir)]
-    args += ["-o", "%(title)s.__MGIDX_%(playlist_index|0)s__._MGTMP_.%(ext)s"]
+    args += ["-o", ("%(title).120s.__MGA_%(uploader,channel,uploader_id|)s"
+                    "__MGI_%(playlist_index|0)s__._MGTMP_.%(ext)s")]
     args += ["--no-part"]
 
     carousel = is_carousel_candidate(url)
@@ -398,8 +415,8 @@ def download_single(url, cfg, index, total, resolution_override=None):
     base_name = None
     if wants_gallerydl:
         log(f"{tag} Probing post metadata...", "INFO")
-        count, caption, has_video = probe_post(url, cfg)
-        base_name = post_base_name(url, caption, cfg)
+        count, caption, has_video, address = probe_post(url, cfg)
+        base_name = post_base_name(url, caption, cfg, address)
         if count and count > 1:
             multi = True
             sub_dir = Path(out_dir) / base_name
@@ -469,7 +486,9 @@ def download_single(url, cfg, index, total, resolution_override=None):
             process.wait()
 
             if process.returncode == 0:
-                for fp in rename_temp_files(out_dir):
+                for fp in rename_temp_files(
+                        out_dir, url,
+                        int(cfg.get("folder_name_words", MAX_CAPTION_WORDS))):
                     log(f"  Saved: {fp.name}", "OK")
                 log(f"{tag} Completed: {url}", "OK")
                 return (url, True, "OK")

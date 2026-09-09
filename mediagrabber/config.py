@@ -1,6 +1,7 @@
 """Paths, defaults and config persistence."""
 
 import json
+import threading
 from pathlib import Path
 
 from .platform_support import EXE, app_dir
@@ -124,8 +125,8 @@ DEFAULTS = {
     "max_retries": 3,
     # Browser to borrow login cookies from. "auto" detects, "none" disables.
     "cookies_browser": "auto",
-    # Carousel folders are named from the first N words of the post caption.
-    "folder_name_words": 4,
+    # Words of caption kept in a name: "[Address] - [up to five words]".
+    "folder_name_words": 5,
 }
 
 
@@ -143,6 +144,12 @@ def load_config():
     # a mode nothing knows about, leaving the app with no working format.
     if cfg.get("mode") not in ("video", "audio"):
         cfg["mode"] = "video"
+
+    # v3.4 names files "[Address] - [Caption]" and settled on five caption
+    # words. Four was the previous default, so a config still carrying it was
+    # never a deliberate choice — anything else the user actually picked stays.
+    if cfg.get("folder_name_words") == 4:
+        cfg["folder_name_words"] = 5
 
     return cfg
 
@@ -166,3 +173,25 @@ def save_versions(versions):
     VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(VERSION_FILE, "w", encoding="utf-8") as f:
         json.dump(versions, f, indent=2)
+
+
+#: Serialises the read-modify-write in update_versions(). The tool updaters
+#: run concurrently, and each one records the version it just installed.
+_VERSIONS_LOCK = threading.Lock()
+
+
+def update_versions(**changes):
+    """Record just these keys, leaving whatever else is on disk alone.
+
+    The tools download in parallel, so "load the file, set my key, write the
+    file back" is a lost update waiting to happen: two updaters read the same
+    snapshot and the second one to write erases the first one's version. Then
+    the tool it erased looks un-installed and is downloaded again on the next
+    run, forever. Re-reading inside the lock and writing only the changed keys
+    is what makes concurrent updaters safe.
+    """
+    with _VERSIONS_LOCK:
+        current = load_versions()
+        current.update(changes)
+        save_versions(current)
+        return current

@@ -35,7 +35,9 @@ from mediagrabber.config import DEFAULTS                       # noqa: E402
 from mediagrabber.download import (build_ytdlp_args,           # noqa: E402
                                    is_no_video, is_permanent_error,
                                    is_tool_failure)
-from mediagrabber.probe import (_has_video,                    # noqa: E402
+from mediagrabber.probe import (MAX_ADDRESS_CHARS,             # noqa: E402
+                                MAX_CAPTION_WORDS, _has_video,
+                                build_name, clean_address,
                                 is_carousel_candidate, is_post_url,
                                 needs_login, post_folder_name)
 
@@ -225,18 +227,128 @@ def check_error_classification(fail):
         fail("'Unable to extract' must not be read as no-video")
 
 
+
+def check_naming(fail):
+    """Downloaded files are named "[Address] - [Caption]".
+
+    The rules are small but every one of them is load-bearing on a real
+    filesystem: an over-long name fails to write on Windows once the folder
+    path is added, a missing half must not leave a dangling separator, and the
+    @ must appear exactly once whether or not the source already supplied it.
+    """
+    ig = "https://www.instagram.com/p/DblkhUwAYDz/"
+    yt = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+    # An Instagram address is a handle and carries the @; a YouTube channel is
+    # a display name and does not.
+    if clean_address("pinkbutter", ig) != "@pinkbutter":
+        fail("an Instagram address should be prefixed with @")
+    if clean_address("@pinkbutter", ig) != "@pinkbutter":
+        fail("an address that already has @ must not end up with two")
+    if str(clean_address("Rick Astley", yt)).startswith("@"):
+        fail("a YouTube channel is a name, not a handle — no @")
+
+    long_addr = clean_address("A Very Long Channel Name That Runs On", yt)
+    if len(long_addr) > MAX_ADDRESS_CHARS:
+        fail(f"address {long_addr!r} is over {MAX_ADDRESS_CHARS} characters")
+
+    for junk in ("", "   ", None, "///"):
+        if clean_address(junk, ig) is not None:
+            fail(f"unusable address {junk!r} should be None, not a name")
+
+    caption = "Pink ketemu butter yellow today at the cafe with friends"
+    name = build_name(ig, "pinkbutter", caption)
+    if not name.startswith("@pinkbutter - "):
+        fail(f"expected '@pinkbutter - ...', got {name!r}")
+    words = name.split(" - ", 1)[1].split()
+    if len(words) > MAX_CAPTION_WORDS:
+        fail(f"caption kept {len(words)} words, max is {MAX_CAPTION_WORDS}")
+
+    # Either half missing must not leave a dangling separator.
+    for addr, cap in ((None, caption), ("pinkbutter", None), (None, None)):
+        got = build_name(ig, addr, cap)
+        if got.startswith(" - ") or got.endswith(" - ") or got.strip() == "-":
+            fail(f"address={addr!r} caption={cap!r} produced {got!r}")
+        if not got.strip():
+            fail(f"address={addr!r} caption={cap!r} produced an empty name")
+
+    # No caption still identifies the post, not just the account - otherwise
+    # every post by one person collides on one name.
+    no_caption = build_name(ig, "pinkbutter", None)
+    if "DblkhUwAYDz" not in no_caption:
+        fail(f"a captionless post must stay identifiable, got {no_caption!r}")
+
+    # Nothing may contain a character Windows rejects in a filename.
+    for bad in '<>:"/|?*':
+        probe = build_name(ig, f"we{bad}ird", f"cap{bad}tion here now please")
+        if bad in probe:
+            fail(f"{bad!r} survived into the filename {probe!r}")
+
+
+def check_rename_applies_naming(fail):
+    """The yt-dlp path has to reach the same names as the gallery-dl path.
+
+    yt-dlp cannot express "first five words" in an output template, so it
+    writes a marker name and the policy is applied on rename. If that marker
+    and the regex that reads it ever drift apart, files keep their raw titles
+    and nothing looks broken until you open the folder.
+    """
+    import tempfile
+    from mediagrabber.download import build_ytdlp_args, rename_temp_files
+
+    template = build_ytdlp_args(
+        "https://www.youtube.com/watch?v=x", _cfg("video"))
+    template = template[template.index("-o") + 1]
+    for marker in ("__MGA_", "__MGI_", "_MGTMP_"):
+        if marker not in template:
+            fail(f"the output template lost the {marker} marker")
+    if not template.startswith("%(title)"):
+        fail("the title must lead, or an empty first field makes a dotfile "
+             "that the cleanup glob cannot see")
+
+    with tempfile.TemporaryDirectory() as d:
+        out = pathlib.Path(d)
+        for i in (1, 2, 3):
+            (out / f"Slide one caption here friends indeed"
+                   f".__MGA_pinkbutter__MGI_{i}__._MGTMP_.jpg").write_text("x")
+        (out / "Never Gonna Give You Up Again"
+               ".__MGA_Rick Astley__MGI_0__._MGTMP_.mp4").write_text("x")
+
+        names = sorted(f.name for f in rename_temp_files(
+            out, "https://www.instagram.com/p/DblkhUwAYDz/", 5))
+
+        if any("_MGTMP_" in n or "__MGA_" in n for n in names):
+            fail(f"a temp marker survived into a final name: {names}")
+
+        numbered = [n for n in names if n.startswith("@pinkbutter")]
+        if len(numbered) != 3:
+            fail(f"expected 3 numbered carousel items, got {numbered}")
+        for want in ("- 01.jpg", "- 02.jpg", "- 03.jpg"):
+            if not any(n.endswith(want) for n in numbered):
+                fail(f"carousel item ending {want} is missing from {numbered}")
+
+        # Every item shares the folder's stem, so the folder and its contents
+        # read as one thing.
+        stems = {n.rsplit(" - ", 1)[0] for n in numbered}
+        if stems != {"@pinkbutter - Slide one caption here friends"}:
+            fail(f"carousel items disagree on their shared name: {stems}")
+
+
 def main():
     failures = []
     fail = failures.append
 
     check_urls(fail)
     check_args(fail)
+    check_naming(fail)
+    check_rename_applies_naming(fail)
     check_post_contents(fail)
     check_error_classification(fail)
 
     print(f"Checked {len(POSTS)} post URLs, {len(NON_POSTS)} non-post URLs, "
           f"the yt-dlp arguments per mode, the legacy-mode migration, "
-          f"images-vs-video detection, and how yt-dlp's errors are classified.")
+          f"images-vs-video detection, how yt-dlp's errors are classified, "
+          f"and the '[Address] - [Caption]' naming on both download paths.")
     print("=" * 60)
     if failures:
         print("FAILURES:")

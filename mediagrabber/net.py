@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from .ui import C, log
+from .ui import C, is_quiet, log
 
 USER_AGENT = "MediaGrabber/3.0"
 
@@ -22,6 +22,20 @@ def resolve_redirect(url, timeout=30):
     req = Request(url, headers={"User-Agent": USER_AGENT})
     with urlopen(req, timeout=timeout) as resp:
         return resp.geturl()
+
+
+#: Cleared while several tools download at once. A byte-count line redrawn
+#: with a carriage return assumes it owns the bottom of the terminal; four of
+#: them at once overwrite each other into nonsense.
+_SHOW_PROGRESS = True
+
+
+def set_progress(enabled):
+    """Turn the live byte counter on or off. Returns the previous setting."""
+    global _SHOW_PROGRESS
+    was = _SHOW_PROGRESS
+    _SHOW_PROGRESS = bool(enabled)
+    return was
 
 
 def download_file(url, dest, desc="file", max_retries=3):
@@ -49,12 +63,13 @@ def download_file(url, dest, desc="file", max_retries=3):
                             break
                         f.write(chunk)
                         downloaded += len(chunk)
-                        if total > 0:
+                        if total > 0 and _SHOW_PROGRESS and not is_quiet():
                             pct = downloaded * 100 // total
                             print(f"\r  {C.DIM}{downloaded / 1048576:.1f}/"
                                   f"{total / 1048576:.1f} MB ({pct}%){C.RESET}",
                                   end="", flush=True)
-                print()
+                if _SHOW_PROGRESS and not is_quiet():
+                    print()
 
             if total > 0 and downloaded < total:
                 log(f"Incomplete download ({downloaded}/{total} bytes), retrying...", "WARN")

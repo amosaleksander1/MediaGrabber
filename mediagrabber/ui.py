@@ -2,6 +2,7 @@
 
 import datetime
 import sys
+import threading
 from pathlib import Path
 
 from . import APP_VERSION
@@ -52,6 +53,16 @@ _QUIET = False
 #: Levels that are worth interrupting a quiet stretch for.
 _ALWAYS_SHOW = ("WARN", "ERROR")
 
+#: Held across the print and the file append. The tool updaters run on several
+#: threads at once, and without this two messages interleave mid-line.
+_LOG_LOCK = threading.Lock()
+
+
+def is_quiet():
+    """Whether routine output is currently going to the log file only."""
+    return _QUIET
+
+
 _COLOR_MAP = {
     "INFO": C.WHITE,
     "OK": C.GREEN,
@@ -98,14 +109,15 @@ def log(msg, level="INFO", color=None):
     """Print to the terminal with colour and append to the session log."""
     stamp = datetime.datetime.now().strftime("%H:%M:%S")
     c = color or _COLOR_MAP.get(level, C.WHITE)
-    if not _QUIET or level in _ALWAYS_SHOW:
-        print(f"{c}[{stamp}] [{level}]{C.RESET} {msg}")
-    if _LOG_FILE:
-        try:
-            with open(_LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(f"[{stamp}] [{level}] {msg}\n")
-        except Exception:
-            pass
+    with _LOG_LOCK:
+        if not _QUIET or level in _ALWAYS_SHOW:
+            print(f"{c}[{stamp}] [{level}]{C.RESET} {msg}")
+        if _LOG_FILE:
+            try:
+                with open(_LOG_FILE, "a", encoding="utf-8") as f:
+                    f.write(f"[{stamp}] [{level}] {msg}\n")
+            except Exception:
+                pass
 
 
 def banner_lines():
