@@ -127,17 +127,33 @@ DEFAULTS = {
     "cookies_browser": "auto",
     # Words of caption kept in a name: "[Address] - [up to five words]".
     "folder_name_words": 5,
+    # Set once the first-run wizard has been completed. An explicit marker,
+    # because config.json is written on the very first startup — before the
+    # user has answered anything — so its existence proves nothing.
+    "setup_done": False,
 }
 
 
 def load_config():
     cfg = dict(DEFAULTS)
+    raw = {}
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                cfg.update(json.load(f))
+                raw = json.load(f)
+            cfg.update(raw)
         except Exception:
             pass
+
+    # An existing installation must not be marched through first-run setup.
+    # A config written before this flag existed counts as already set up if it
+    # shows any sign of use — a browser chosen, or the output folder moved.
+    if "setup_done" not in raw:
+        cfg["setup_done"] = bool(
+            raw.get("cookies_browser", "auto") != "auto"
+            or raw.get("output_dir", OUTPUT_DIR) != OUTPUT_DIR
+            or COOKIES_FILE.exists()
+        )
 
     # v3.3 folded the old "media" mode into Video/Image, which now fetches
     # whatever a post holds. A config saved before that would otherwise select

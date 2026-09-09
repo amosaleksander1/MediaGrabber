@@ -164,6 +164,30 @@ def check_args(fail):
         fail(f"legacy 'media' config should migrate to video, got "
              f"{migrated.get('mode')!r}")
 
+    # An existing installation must not be marched through first-run setup on
+    # upgrade. Anyone who picked a browser or moved their output folder has
+    # plainly finished setting up, whatever the (absent) flag says.
+    for raw, want, why in (
+            ({"cookies_browser": "zen"}, True, "a chosen browser"),
+            ({"output_dir": "D:/Elsewhere"}, True, "a moved output folder"),
+            ({"mode": "video"}, False, "an untouched config"),
+            ({"setup_done": False, "cookies_browser": "zen"}, False,
+             "an explicit false")):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "config.json"
+            path.write_text(json.dumps(raw), encoding="utf-8")
+            original_cfg = mgconfig.CONFIG_FILE
+            original_cookies = mgconfig.COOKIES_FILE
+            try:
+                mgconfig.CONFIG_FILE = path
+                mgconfig.COOKIES_FILE = pathlib.Path(d) / "cookies.txt"
+                got = mgconfig.load_config().get("setup_done")
+            finally:
+                mgconfig.CONFIG_FILE = original_cfg
+                mgconfig.COOKIES_FILE = original_cookies
+        if got != want:
+            fail(f"{why}: setup_done should be {want}, got {got}")
+
 
 def check_post_contents(fail):
     """The probe decides whether yt-dlp is worth calling at all.

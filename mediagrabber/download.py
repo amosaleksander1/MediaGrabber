@@ -405,7 +405,7 @@ def download_single(url, cfg, index, total, resolution_override=None):
     wants_gallerydl = is_post_url(url)
     if not YTDLP_EXE.exists() or (wants_gallerydl and not gallerydl_available()):
         log(f"{tag} Required tool missing — updating tools now...", "WARN")
-        run_updates(cfg, force=True)
+        run_updates(cfg, force=True, interactive=False)
 
     # Posts on a known platform are probed first, so the files are named from
     # the caption and a multi-item post gets its own folder. Media mode takes
@@ -512,7 +512,7 @@ def download_single(url, cfg, index, total, resolution_override=None):
             # Outdated-tool error: force-update once and retry for free.
             if not updated_once and is_tool_failure(output_lines):
                 log(f"{tag} Failure looks tool-related — force-updating tools and retrying...", "WARN")
-                run_updates(cfg, force=True)
+                run_updates(cfg, force=True, interactive=False)
                 updated_once = True
                 attempt -= 1
                 continue
@@ -531,7 +531,7 @@ def download_single(url, cfg, index, total, resolution_override=None):
 
         except FileNotFoundError:
             log(f"{tag} Downloader binary missing — reinstalling tools...", "ERROR")
-            run_updates(cfg, force=True)
+            run_updates(cfg, force=True, interactive=False)
             continue
 
         except OSError as e:
@@ -539,7 +539,7 @@ def download_single(url, cfg, index, total, resolution_override=None):
             if _looks_like_abi_failure(str(e)):
                 log(f"{tag} A bundled tool will not run on this machine ({e}) — "
                     "re-downloading for this platform...", "ERROR")
-                run_updates(cfg, force=True)
+                run_updates(cfg, force=True, interactive=False)
                 continue
             log(f"{tag} Crashed: {url} — {e}", "ERROR")
             return (url, False, str(e))

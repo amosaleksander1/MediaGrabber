@@ -7,9 +7,11 @@ fourth platform a one-file change.
 
 import os
 import platform as _platform
+import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 # ── PLATFORM FLAGS ───────────────────────────────────────────────────────────
 
@@ -216,6 +218,66 @@ def enable_ansi():
                 stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError, OSError):
             pass
+
+
+# ── PASTED PATHS ─────────────────────────────────────────────────────────────
+
+def copy_path_hint():
+    """How to get a folder's path onto the clipboard, in this OS's words."""
+    if IS_WIN:
+        return ('In File Explorer, open the folder you want, then hold Shift, '
+                'right-click it and choose "Copy as path". Paste it here.')
+    if IS_MAC:
+        return ('In Finder, right-click the folder, hold the Option key, then '
+                'choose "Copy ... as Pathname". Paste it here. Dragging the '
+                'folder into this window works too.')
+    return ('In your file manager, right-click the folder and copy its '
+            'location, or drag the folder into this window.')
+
+
+def normalise_pasted_path(text):
+    """Turn whatever the clipboard produced into a real path.
+
+    Every OS wraps a copied path in something, and each wraps it differently.
+    Windows' "Copy as path" adds double quotes. Dragging a folder into a
+    terminal escapes its spaces with backslashes. GNOME copies a file:// URI
+    with the spaces percent-encoded. Handing any of those straight to Path()
+    yields a folder whose name really does contain a quote or a %20, and the
+    downloads then land somewhere the user will not think to look.
+
+    Returns None when nothing usable is left.
+    """
+    if not text:
+        return None
+    raw = str(text).strip()
+
+    # Windows forbids a quote in a folder name outright, and no other OS puts
+    # one there on purpose, so a stray quote is always a paste artifact —
+    # a half-selected "Copy as path" — and is stripped rather than honoured.
+    for quote in ('"', "'"):
+        if len(raw) >= 2 and raw.startswith(quote) and raw.endswith(quote):
+            raw = raw[1:-1].strip()
+
+    # file:///home/me/My%20Videos -> /home/me/My Videos
+    if raw.lower().startswith("file://"):
+        parsed = urlparse(raw)
+        raw = unquote(parsed.path)
+        # file:///C:/Users/... keeps a leading slash Windows cannot use.
+        if IS_WIN and re.match(r"^/[A-Za-z]:", raw):
+            raw = raw[1:]
+
+    # A folder dragged into a terminal arrives with escaped spaces. On Windows
+    # the backslash is the separator, so this must not run there.
+    if not IS_WIN:
+        raw = raw.replace("\\ ", " ")
+
+    raw = raw.strip().strip('"').strip("'").strip()
+    if not raw:
+        return None
+    try:
+        return Path(raw).expanduser()
+    except Exception:
+        return None
 
 
 # ── APP LOCATION ─────────────────────────────────────────────────────────────

@@ -7,13 +7,15 @@ from . import APP_VERSION
 from .checkup import run_checkup
 from .config import (CONFIG_FILE, COOKIES_FILE, LOGS_DIR, OUTPUT_DIR,
                      URLS_FILE, load_config, save_config)
-from .cookies import choose_cookie_browser, detect_installed_browsers
+from .cookies import detect_installed_browsers
 from .download import DownloadStopped, download_single
-from .menu import (ACTIONS, build_layout, format_status, hit_test,
-                   settings_rows)
+from .menu import ACTIONS, build_layout, format_status, settings_rows
+from .panel import handle_event
 from .nativehost import (CHROME_EXTENSION_ID, bridge_binary, register,
                          status, unregister)
-from .platform_support import (IS_WIN, enable_ansi, open_path,
+from .firstrun import choose_browser, needs_setup, run_setup
+from .platform_support import (copy_path_hint, enable_ansi,
+                               normalise_pasted_path, open_path,
                                pick_folder_dialog, set_console_title,
                                stop_hint_text)
 from .screen import Screen, is_interactive
@@ -148,40 +150,59 @@ def download_settings(cfg):
 
 
 def change_output_folder(cfg):
+    """Pick where downloads land.
+
+    Pasting is listed first because it is what people actually do: nobody
+    types a path like "D:/3. Dev Kitchen/yt-dlp" by hand correctly, and the
+    file manager will hand them the whole thing on the clipboard.
+    """
     current = cfg.get("output_dir", OUTPUT_DIR)
-    print(f"\n  {C.BOLD}{C.CYAN}Change Output Folder{C.RESET}")
-    print(f"  {C.DIM}Current: {current}{C.RESET}\n")
-    print(f"  {C.GREEN}[1]{C.RESET} Type a new path")
-    print(f"  {C.GREEN}[2]{C.RESET} Browse with folder picker")
-    print(f"  {C.GREEN}[3]{C.RESET} Reset to default")
-    print(f"  {C.DIM}[0] Cancel{C.RESET}\n")
-    choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
+    print()
+    print(f"  {C.BOLD}{C.CYAN}Change Output Folder{C.RESET}")
+    print(f"  {C.DIM}Current: {current}{C.RESET}")
+    print()
+    print(f"  {C.GREEN}[1]{C.RESET} Paste a folder path  "
+          f"{C.DIM}(copied from your file manager){C.RESET}")
+    print(f"  {C.GREEN}[2]{C.RESET} Browse with a folder picker")
+    print(f"  {C.GREEN}[3]{C.RESET} Reset to the default folder")
+    print(f"  {C.DIM}[0] Cancel{C.RESET}")
+    print()
+    try:
+        choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
+    except EOFError:
+        return
 
     if choice == "1":
-        new_path = input(f"  {C.CYAN}New path:{C.RESET} ").strip().strip('"').strip("'")
-        if not new_path:
-            log("No path entered.", "WARN")
-            return
-        # A dragged-in folder on macOS/Linux arrives with escaped spaces.
-        if not IS_WIN:
-            new_path = new_path.replace("\\ ", " ")
-        p = Path(new_path).expanduser()
+        print()
+        print(f"  {C.BOLD}How to copy a folder's path{C.RESET}")
+        print(f"  {C.DIM}{copy_path_hint()}{C.RESET}")
+        print(f"  {C.DIM}Quotes are fine — paste exactly what you copied.{C.RESET}")
+        print()
         try:
-            p.mkdir(parents=True, exist_ok=True)
-            cfg["output_dir"] = str(p)
+            typed = input(f"  {C.CYAN}Paste the folder path:{C.RESET} ")
+        except EOFError:
+            return
+        path = normalise_pasted_path(typed)
+        if path is None:
+            log("Nothing was pasted — the output folder is unchanged.", "WARN")
+            return
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            cfg["output_dir"] = str(path)
             save_config(cfg)
-            log(f"Output folder changed to: {p}", "OK")
+            log(f"Downloads will be saved to: {path}", "OK")
         except Exception as e:
-            log(f"Invalid path: {e}", "ERROR")
+            log(f"That folder cannot be used: {e}", "ERROR")
 
     elif choice == "2":
         picked = pick_folder_dialog(current)
         if picked:
             cfg["output_dir"] = picked
             save_config(cfg)
-            log(f"Output folder changed to: {picked}", "OK")
+            log(f"Downloads will be saved to: {picked}", "OK")
         else:
-            log("No folder selected (or no native picker here) — use option [1].", "WARN")
+            log("No folder selected (or no picker on this system) — "
+                "use option [1] and paste the path instead.", "WARN")
 
     elif choice == "3":
         cfg["output_dir"] = OUTPUT_DIR
@@ -324,7 +345,7 @@ def login_and_browser(cfg):
         if choice in ("0", ""):
             return
         if choice == "1":
-            choose_cookie_browser(cfg)
+            choose_browser(cfg)
         elif choice == "2":
             connect_extension(cfg)
         elif choice == "3":
@@ -360,64 +381,26 @@ def run_action(name, cfg):
         open_path(cfg.get("output_dir", OUTPUT_DIR))
     elif name == "folder":
         change_output_folder(cfg)
+    elif name == "setup":
+        run_setup(cfg, force=True)
     elif name == "exit":
         log("Exiting. Goodbye!", "INFO")
         return True
     return False
 
 
-def _column_of(cfg, row):
-    """Which option in this settings row is the current value."""
-    _, key, values = row
-    try:
-        return values.index(cfg.get(key))
-    except ValueError:
-        return 0
-
-
 def _handle_event(cfg, layout, focus, event):
-    """Apply one keypress or click. Returns an action name, or None to redraw."""
-    rows = layout.rows
-    row = rows[focus["row"]]
+    """The main menu's keys and clicks — the shared handler, wired to config.
 
-    if event.kind == "mouse":
-        hit = hit_test(layout, event.x, event.y)
-        if hit is None:
-            return None
-        focus["row"], focus["col"] = hit.row, hit.col
-        kind, first, second = hit.target
-        if kind == "set":
-            apply_setting(cfg, first, second)
-            return None
-        return first
-
-    name = event.name
-
-    if name in ("up", "down"):
-        step = -1 if name == "up" else 1
-        focus["row"] = (focus["row"] + step) % len(rows)
-        new_row = rows[focus["row"]]
-        focus["col"] = _column_of(cfg, new_row) if new_row[0] == "settings" else 0
-        return None
-
-    if row[0] == "settings":
-        _, key, values = row
-        if name in ("left", "right", "enter", "space"):
-            step = -1 if name == "left" else 1
-            focus["col"] = (_column_of(cfg, row) + step) % len(values)
-            apply_setting(cfg, key, values[focus["col"]])
-            return None
-    elif name in ("enter", "space"):
-        return row[1]
-
-    if name in ("escape", "q"):
-        return "exit"
-
-    for number, action, _, _ in ACTIONS:
-        if name == number:
-            return action
-
-    return None
+    Every screen in the app runs through panel.handle_event, so an arrow, an
+    Enter and a click mean the same thing on the menu, the browser picker and
+    the first-run wizard alike.
+    """
+    return handle_event(layout, focus, event,
+                        get_current=cfg.get,
+                        set_value=lambda k, v: apply_setting(cfg, k, v),
+                        number_actions=[(n, a) for n, a, _, _ in ACTIONS],
+                        escape_action="exit")
 
 
 def _choose_interactively(cfg, focus, problem=None):
@@ -520,7 +503,9 @@ def main():
     with quiet_output():
         log(f"App directory: {CONFIG_FILE.parent}", "INFO")
         log(f"Log file: {log_file()}", "INFO")
-        tools_ok = run_updates(cfg)
+        # Never interrupts startup with a question; a problem is
+        # surfaced on the menu instead, where it stays visible.
+        tools_ok = run_updates(cfg, interactive=False)
         healthy = run_checkup(cfg, quick=True) and tools_ok
     print("\r" + " " * 40 + "\r", end="")
 
@@ -529,6 +514,9 @@ def main():
     problem = None
     if not healthy:
         problem = f"Startup found problems — see {log_file()}"
+
+    if needs_setup(cfg) and is_interactive():
+        run_setup(cfg)
 
     if is_interactive():
         _interactive_loop(cfg, problem)

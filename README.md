@@ -6,6 +6,7 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 
 ## Features
 
+- **Guided first run** — a short setup asks where downloads go and which browser holds your login, and every menu entry says what it is for. Re-runnable any time from `[8] Setup Wizard`
 - **Batch or single downloads** — queue links in `urls.txt` or paste one at a time
 - **Click-and-arrow menu** — mode, format and resolution sit on the main screen as rows of radio buttons you arrow through or click, and the screen redraws in place instead of scrolling away. Falls back to the plain numbered menu when there is no real terminal
 - **Two modes** — *Video / Image* (MP4/MKV/WebM/… with resolution capping, and the images in a post) or *Audio* (MP3/FLAC/Opus/…). Choosing Audio reshapes the screen: the audio formats replace the video ones and the resolution row disappears
@@ -14,7 +15,7 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 - **Instagram & TikTok carousels** — detects real multi-item posts and downloads *all* slides (images **and** videos) into a subfolder, with every slide numbered in order and sharing the folder's name (`@pinkbutter - pink ketemu butter yellow - 01.jpg`, `- 02.mp4`, …). Single reels/posts download normally — no folder.
 - **Baked-in login** — borrows your existing browser session (no password stored), with a one-time cookie export so downloads work while the browser is open
 - **Optional browser extension** — hands your login straight to the app, skipping cookie decryption entirely (no Keychain prompt, no Full Disk Access, no closing the browser), and sends the page you are looking at to the download queue
-- **Self-maintaining** — yt-dlp, ffmpeg, Deno and gallery-dl are auto-downloaded for *your* platform and architecture; update checks run at most every 14 days (or when a tool breaks), so startup is instant
+- **Self-maintaining** — yt-dlp, ffmpeg, Deno and gallery-dl are auto-downloaded for *your* platform and architecture, **all four at once** rather than one after another (242 MB in ~15s on a fast line); update checks run at most every 14 days, so startup is instant
 - **Smart retries** — transient errors retry with backoff; permanent errors (private/removed posts) fail fast; extraction errors from an outdated downloader trigger an automatic tool update + retry
 - **Graceful stop** — press `Q` during downloads (macOS/Linux: `Q` then Enter) to cancel cleanly
 
@@ -179,11 +180,28 @@ DOWNLOAD SETTINGS
   Resolution    ▣ Best  ▢ 2160p  ▢ 1440p  ▢ 1080p  ▢ 720p  ▢ 480p  …
   Auto-update   ▣ On    ▢ Off
 
-  [1] Download Single URL      [5] Tools Update
-  [2] Download Batch           [6] Open Output Folder
-  [3] Edit Batch URLs          [7] Change Output Folder
-  [4] Login & Browser          [0] Exit
+  [1] Download Single URL   one link, right now
+  [2] Download Batch        every link in your list
+  [3] Edit Batch URLs       paste links into your list
+  [4] Login & Browser       for Instagram, TikTok, X
+  [5] Tools Update          fix a broken downloader
+  [6] Open Output Folder    see your downloads
+  [7] Change Output Folder  where downloads are saved
+  [8] Setup Wizard          run first-time setup again
+  [0] Exit
 ```
+
+### Setting the output folder
+
+Typing a long path by hand is the step people get wrong, so `[7]` takes a **pasted** path — including the quotes Windows adds:
+
+| OS | How to copy it |
+|---|---|
+| Windows | Open the folder in File Explorer, hold **Shift**, right-click it, choose **Copy as path** |
+| macOS | Right-click the folder in Finder, hold **Option**, choose **Copy … as Pathname** (or drag the folder into the window) |
+| Linux | Right-click → copy location, or drag the folder into the window |
+
+Surrounding quotes, `file://` links and drag-escaped spaces are all accepted and cleaned up.
 
 **↑↓** moves between rows, **←→** changes the focused setting, **Enter** runs an
 action (or steps to the next option on a settings row), and the number keys work

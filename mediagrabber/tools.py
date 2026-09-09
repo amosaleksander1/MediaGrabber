@@ -459,6 +459,85 @@ def repair_gallerydl():
     return _install_gallerydl_via_pip()
 
 
+# ── MISSING SYSTEM PYTHON (Intel Macs) ───────────────────────────────────────
+
+def needs_system_python():
+    """True when this machine can only get gallery-dl through pip.
+
+    Upstream publishes no gallery-dl binary for Intel Macs, so those fall back
+    to a pip install into tools/ — and that is the one and only place where a
+    MediaGrabber user needs anything installed on their system. The app itself
+    carries its own Python inside the binary.
+    """
+    return gallerydl_asset_name() is None and not _system_python()
+
+
+def python_install_advice():
+    """(what is missing, the command that fixes it) for this platform."""
+    if IS_MAC:
+        return ("Apple's command line tools, which include Python 3",
+                ["xcode-select", "--install"])
+    if IS_WIN:                      # a binary is published, so this is unlikely
+        return ("Python 3 from python.org", None)
+    return ("Python 3 from your distribution, e.g. 'sudo apt install python3'",
+            None)
+
+
+def offer_python_install(ask=True):
+    """Explain the missing dependency and, with consent, start the installer.
+
+    Deliberately never runs without an explicit yes, and never uses sudo: on
+    macOS this hands off to Apple's own installer dialog, which asks for
+    whatever it needs itself. Returns True only if Python is available now.
+    """
+    if not needs_system_python():
+        return bool(_system_python())
+
+    what, command = python_install_advice()
+    # WARN so these survive the quiet startup - this one genuinely matters.
+    log("Image posts need gallery-dl, and this Mac has no prebuilt copy of "
+        "it, so it has to be installed with Python.", "WARN")
+    log(f"Python 3 was not found. MediaGrabber needs {what}.", "WARN")
+    log("Nothing is installed system-wide by MediaGrabber itself - only "
+        "gallery-dl, into its own tools/ folder.", "INFO")
+
+    if command is None:
+        log(f"Please install {what}, then run menu [5] Tools Update.", "INFO")
+        return False
+
+    if ask:
+        prompt = (f"  Run '{' '.join(command)}' now? macOS will open its own "
+                  f"installer window. [y/N] ")
+        try:
+            answer = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            log("No answer - skipping. Run menu [5] when Python is installed.",
+                "WARN")
+            return False
+        if answer not in ("y", "yes"):
+            log("Skipped. Image-only posts may fail until Python is "
+                "installed; run menu [5] afterwards.", "WARN")
+            return False
+
+    log(f"Starting {' '.join(command)}...", "UPDATE")
+    try:
+        run_quiet(command, timeout=60)
+    except Exception as e:
+        log(f"Could not start the installer: {e}", "ERROR")
+        return False
+
+    if _system_python():
+        log("Python 3 is available now.", "OK")
+        return True
+
+    # The macOS installer runs in its own window and takes minutes; the tool
+    # will not appear on PATH until the user finishes it there.
+    log("Finish the macOS installer window that just opened, then run "
+        "menu [5] Tools Update to install gallery-dl.", "INFO")
+    return False
+
+
 # ── ORCHESTRATION ────────────────────────────────────────────────────────────
 
 def tools_present():
@@ -466,12 +545,14 @@ def tools_present():
             and gallerydl_available())
 
 
-def run_updates(cfg, force=False):
+def run_updates(cfg, force=False, interactive=True):
     """Check/download every bundled tool.
 
     Throttled: if all tools exist and the last check was under
     ``UPDATE_INTERVAL_DAYS`` ago this returns immediately, so startup is
-    instant. ``force=True`` (menu [5] Tools Update, or after a tool failure) always checks.
+    instant. ``force=True`` (menu [5] Tools Update, or after a tool failure)
+    always checks. ``interactive=False`` suppresses the one question this can
+    ask, for piped runs and CI where there is nobody to answer it.
     """
     if not force:
         if not cfg.get("auto_update", True):
@@ -495,6 +576,14 @@ def run_updates(cfg, force=False):
                 "build requires macOS 12+. Downloads may fail.", "WARN")
 
     results = update_all()
+
+    # Asked here rather than inside the updater: that one runs on a worker
+    # thread alongside three others, and a yes/no prompt from a thread would
+    # be buried under their output and read from the same stdin they do.
+    if not results.get("gallery-dl") and needs_system_python():
+        if offer_python_install(ask=interactive):
+            results["gallery-dl"] = update_gallerydl()
+
     update_versions(_last_check=time.time())
     return all(results.values())
 

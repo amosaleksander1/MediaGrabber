@@ -13,6 +13,7 @@ value. Here they are rows you land on with the arrow keys or click directly.
 
 import re
 import shutil
+import textwrap
 from collections import namedtuple
 
 from .config import (AUDIO_FORMATS, RESOLUTION_OPTIONS, VIDEO_FORMATS)
@@ -33,13 +34,14 @@ Layout = namedtuple("Layout", "lines hits rows")
 #: interactive menu and as the whole interface in the piped fallback, so the two
 #: never drift apart.
 ACTIONS = [
-    ("1", "single", "Download Single URL", ""),
-    ("2", "batch", "Download Batch", "from urls.txt"),
-    ("3", "edit", "Edit Batch URLs", "opens urls.txt"),
-    ("4", "login", "Login & Browser", ""),
-    ("5", "update", "Tools Update", ""),
-    ("6", "output", "Open Output Folder", ""),
-    ("7", "folder", "Change Output Folder", ""),
+    ("1", "single", "Download Single URL", "one link, right now"),
+    ("2", "batch", "Download Batch", "every link in your list"),
+    ("3", "edit", "Edit Batch URLs", "paste links into your list"),
+    ("4", "login", "Login & Browser", "for Instagram, TikTok, X"),
+    ("5", "update", "Tools Update", "fix a broken downloader"),
+    ("6", "output", "Open Output Folder", "see your downloads"),
+    ("7", "folder", "Change Output Folder", "where downloads are saved"),
+    ("8", "setup", "Setup Wizard", "run first-time setup again"),
     ("0", "exit", "Exit", ""),
 ]
 
@@ -142,6 +144,139 @@ def navigable_rows(cfg):
     return rows
 
 
+def _cursor(is_focused):
+    return f"{C.CYAN}›{C.RESET} " if is_focused else "  "
+
+
+def emit_radio_row(lines, hits, heading, key, options, current, focused,
+                   focus_col, row_index, width, label_w=_LABEL_W):
+    """Draw one row of radio options; record where each one landed.
+
+    Shared by the main menu and the standalone panels so the two cannot drift:
+    a click box that disagrees with the drawn text by even one column sends the
+    click to the neighbouring option, and nothing about the screen looks wrong.
+    Appends to ``lines`` and ``hits`` in place.
+    """
+    prefix = f"{_INDENT}{_cursor(focused)}{heading:<{label_w}}"
+    indent = len(plain(prefix))
+    line = prefix
+    column = indent
+
+    for col, option in enumerate(options):
+        value, label = option[0], option[1]
+        selected = value == current
+        mark = (f"{C.GREEN}{MARK_ON}{C.RESET}" if selected
+                else f"{C.DIM}{MARK_OFF}{C.RESET}")
+        body = f"{mark} {label}"
+        if focused and col == focus_col:
+            body = f"{mark} {C.REVERSE}{label}{C.RESET}"
+        elif selected:
+            body = f"{mark} {C.WHITE}{label}{C.RESET}"
+
+        cell_w = len(plain(body))
+        # Wrap under the label rather than letting the terminal do it, so the
+        # click boxes and the drawn text agree about which line is which.
+        # Always place at least one option per line.
+        if column > indent and column + cell_w > width:
+            lines.append(line.rstrip())
+            line = " " * indent
+            column = indent
+
+        hits.append(Hit(len(lines), column, column + cell_w - 1,
+                        ("set", key, value), row_index, col))
+        line += body + "   "
+        column += cell_w + 3
+
+    lines.append(line.rstrip())
+
+
+def emit_action_row(lines, hits, label, name, hint, focused, row_index,
+                    number=None, width=None):
+    """Draw one selectable action; record its click box.
+
+    The hint is trimmed to whatever room is left rather than allowed to run
+    over: a wrapped row would push every box below it a line out of true, and
+    a click would then land on the wrong entry.
+    """
+    prefix = f"{_INDENT}{_cursor(focused)}"
+    body = f"{C.GREEN}[{number}]{C.RESET} " if number else ""
+    body += f"{C.REVERSE}{label}{C.RESET}" if focused else label
+    if hint:
+        room = (width or 999) - len(plain(prefix)) - len(plain(body)) - 2
+        if room >= 6:
+            body += f"  {C.DIM}{hint[:room]}{C.RESET}"
+    x0 = len(plain(prefix))
+    hits.append(Hit(len(lines), x0, x0 + len(plain(body)) - 1,
+                    ("action", name, None), row_index, 0))
+    lines.append(prefix + body)
+
+
+def wrap_note(text, width):
+    """Explanatory text, wrapped and dimmed. Empty text draws nothing."""
+    if not text:
+        return []
+    room = max(20, width - len(_INDENT) * 2)
+    return [f"{_INDENT}{C.DIM}{piece}{C.RESET}"
+            for piece in textwrap.wrap(text, room)]
+
+
+def build_panel(title, note, groups, actions, values, focus_row=0,
+                focus_col=0, width=None, height=None, interactive=True,
+                label_w=_LABEL_W):
+    """A standalone screen: a title, a note, radio rows, then actions.
+
+    Same shape as the main menu's layout on purpose — identical rows and hit
+    map — so one event handler drives every screen in the app and a click
+    means the same thing wherever it lands.
+
+    groups:  [(heading, key, [(value, label), ...]), ...]
+    actions: [(name, label, hint), ...]
+    values:  {key: currently selected value}
+    """
+    width = width or screen_width()
+    height = height or (screen_height() if interactive else None)
+
+    rows = ([("settings", key, [o[0] for o in options])
+             for _, key, options in groups]
+            + [("action", name, None) for name, _, _ in actions])
+    focus_row = max(0, min(focus_row, max(0, len(rows) - 1)))
+
+    lines, hits = [], []
+    lines.append("")
+    lines.append(f"{_INDENT}{C.BOLD}{C.CYAN}{title}{C.RESET}")
+    lines.extend(wrap_note(note, width))
+    lines.append("")
+
+    row_index = 0
+    for heading, key, options in groups:
+        emit_radio_row(lines, hits, heading, key, options, values.get(key),
+                       interactive and row_index == focus_row, focus_col,
+                       row_index, width, label_w)
+        row_index += 1
+
+    if groups and actions:
+        lines.append("")
+    for name, label, hint in actions:
+        emit_action_row(lines, hits, label, name, hint,
+                        interactive and row_index == focus_row, row_index,
+                        width=width)
+        row_index += 1
+
+    lines.append("")
+    if interactive:
+        kind = rows[focus_row][0] if rows else "action"
+        lines.append(f"{_INDENT}{C.DIM}" + (
+            "up/down move   left/right change   Enter next   or click"
+            if kind == "settings" else
+            "up/down move   Enter choose   or click") + f"{C.RESET}")
+
+    # Trimming here would desync the map, so the note is what gives way.
+    if height and len(lines) > height and note:
+        return build_panel(title, "", groups, actions, values, focus_row,
+                           focus_col, width, height, interactive, label_w)
+    return Layout(lines, hits, rows)
+
+
 def build_layout(cfg, focus_row=0, focus_col=0, login="none saved",
                  interactive=True, width=None, with_banner=True,
                  height=None, problem=None):
@@ -182,64 +317,23 @@ def _compose(cfg, focus_row, focus_col, login, interactive, width,
     rows = navigable_rows(cfg)
     focus_row = max(0, min(focus_row, len(rows) - 1))
 
-    def cursor(is_focused):
-        return f"{C.CYAN}›{C.RESET} " if is_focused else "  "
-
     lines.append("")
     lines.append(f"{_INDENT}{C.BOLD}{C.CYAN}DOWNLOAD SETTINGS{C.RESET}")
 
     row_index = 0
     for heading, key, options in settings_rows(cfg):
-        focused = interactive and row_index == focus_row
-        current = cfg.get(key)
-        prefix = f"{_INDENT}{cursor(focused)}{heading:<{_LABEL_W}}"
-        indent = len(plain(prefix))
-        line = prefix
-        column = indent
-
-        for col, (value, label) in enumerate(options):
-            selected = value == current
-            mark = (f"{C.GREEN}{MARK_ON}{C.RESET}" if selected
-                    else f"{C.DIM}{MARK_OFF}{C.RESET}")
-            body = f"{mark} {label}"
-            if focused and col == focus_col:
-                body = f"{mark} {C.REVERSE}{label}{C.RESET}"
-            elif selected:
-                body = f"{mark} {C.WHITE}{label}{C.RESET}"
-
-            cell_w = len(plain(body))
-            # Wrap under the label rather than letting the terminal do it, so
-            # the click boxes and the drawn text agree about which line is
-            # which. Always place at least one option per line.
-            if column > indent and column + cell_w > width:
-                lines.append(line.rstrip())
-                line = " " * indent
-                column = indent
-
-            hits.append(Hit(len(lines), column, column + cell_w - 1,
-                            ("set", key, value), row_index, col))
-            line += body + "   "
-            column += cell_w + 3
-
-        lines.append(line.rstrip())
+        emit_radio_row(lines, hits, heading, key, options, cfg.get(key),
+                       interactive and row_index == focus_row, focus_col,
+                       row_index, width)
         row_index += 1
 
     lines.append("")
     lines.append(f"{_INDENT}{C.DIM}{'─' * 56}{C.RESET}")
 
     for number, name, label, hint in ACTIONS:
-        focused = interactive and row_index == focus_row
-        prefix = f"{_INDENT}{cursor(focused)}"
-        body = f"{C.GREEN}[{number}]{C.RESET} "
-        text = f"{C.REVERSE}{label}{C.RESET}" if focused else label
-        body += text
-        if hint:
-            body += f"  {C.DIM}{hint}{C.RESET}"
-
-        x0 = len(plain(prefix))
-        hits.append(Hit(len(lines), x0, x0 + len(plain(body)) - 1,
-                        ("action", name, None), row_index, 0))
-        lines.append(prefix + body)
+        emit_action_row(lines, hits, label, name, hint,
+                        interactive and row_index == focus_row, row_index,
+                        number=number, width=width)
         row_index += 1
 
     if show_footer:
