@@ -5,8 +5,12 @@ name: Upstream check
 # URL the app would build still resolves on every supported platform, and
 # records the current upstream versions.
 #
-#   • versions moved      -> opens a pull request with the updated snapshot
+#   • versions moved      -> commits the updated snapshot to main
 #   • an asset disappeared -> opens an issue, because that breaks users
+#
+# The snapshot is a record, not code, so it is committed directly rather than
+# through a pull request: this repo does not let Actions open PRs, and a PR
+# to merge every week for a JSON timestamp would only be noise.
 
 on:
   schedule:
@@ -15,7 +19,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
   issues: write
 
 jobs:
@@ -47,25 +50,22 @@ jobs:
       - name: Verify the menu input decoding and click map
         run: python tests/test_menu.py
 
-      - name: Open a pull request when upstream versions moved
+      - name: Verify the command line
+        run: python tests/test_cli.py
+
+      - name: Commit the snapshot when upstream versions moved
         if: steps.check.outcome == 'success'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          branch: chore/upstream-versions
-          title: "chore: upstream tool versions moved"
-          commit-message: "chore: refresh upstream tool version snapshot"
-          delete-branch: true
-          add-paths: .github/upstream-versions.json
-          body: |
-            Automated weekly upstream check.
-
-            One or more of yt-dlp / ffmpeg / Deno / gallery-dl published a new
-            release. Every download URL still resolves on all five supported
-            platform targets, so no code change is required — this PR just
-            refreshes the recorded snapshot.
-
-            Worth a smoke test before the next release if yt-dlp or gallery-dl
-            moved, since those two track site changes.
+        run: |
+          if git diff --quiet -- .github/upstream-versions.json; then
+            echo "Upstream versions unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/upstream-versions.json
+          git commit -m "Refresh the upstream tool version snapshot" \
+                     -m "Every download URL still resolves on all five platform targets."
+          git push
 
       - name: Open an issue when an upstream asset disappeared
         if: steps.check.outcome == 'failure'
