@@ -10,7 +10,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PAT
 
 # Prefer the bundled binary if this is a release download.
 if [ -x "./MediaGrabber" ]; then
-    exec "./MediaGrabber"
+    exec "./MediaGrabber" "$@"
 fi
 
 PY=""
@@ -27,7 +27,7 @@ if [ -z "$PY" ]; then
     exit 1
 fi
 
-"$PY" mediagrabber.py
+"$PY" mediagrabber.py "$@"
 status=$?
 
 if [ $status -ne 0 ]; then

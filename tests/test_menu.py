@@ -34,7 +34,9 @@ from mediagrabber.config import DEFAULTS                        # noqa: E402
 from mediagrabber.menu import (ACTIONS, build_layout, build_panel,  # noqa: E402
                                hit_test, navigable_rows, plain,
                                settings_rows)
-from mediagrabber.screen import Event, decode_escape             # noqa: E402
+from mediagrabber.panel import handle_event                     # noqa: E402
+from mediagrabber.screen import (Event, _plain_key, decode_escape,  # noqa: E402
+                                 edit_line)
 
 
 def _cfg(**over):
@@ -69,6 +71,42 @@ def check_decoding(fail):
 
     if decode_escape(b"[<garbage;M") is not None:
         fail("an unparseable mouse report must be ignored, not raise")
+
+    # Typed characters keep their case: a pasted URL is case-sensitive.
+    if _plain_key(b"A") != Event("key", "A", 0, 0):
+        fail("a typed capital must not be lowered")
+    for raw in (b"\x7f", b"\x08"):
+        if _plain_key(raw) != Event("key", "backspace", 0, 0):
+            fail(f"{raw!r} must decode as backspace")
+    if _plain_key("ú".encode("utf-8")) != Event("key", "ú", 0, 0):
+        fail("a whole UTF-8 sequence must decode to its character")
+
+
+def check_line_editing(fail):
+    """The prompt Esc can back out of: typing, backspace, enter, escape."""
+    def key(name):
+        return Event("key", name, 0, 0)
+
+    buf = ""
+    for ch in "https://x.com/AbC":
+        buf, done = edit_line(buf, key(ch))
+        if done:
+            fail(f"typing {ch!r} must not finish the line")
+    buf, _ = edit_line(buf, key("space"))
+    buf, _ = edit_line(buf, key("backspace"))
+    buf, _ = edit_line(buf, key("backspace"))
+    if buf != "https://x.com/Ab":
+        fail(f"typed line came out as {buf!r}")
+    if edit_line(buf, key("up")) != (buf, None):
+        fail("an arrow key must not change the line")
+    if edit_line("", key("backspace")) != ("", None):
+        fail("backspace on an empty line must do nothing")
+    if edit_line(buf, key("enter")) != (buf, "enter"):
+        fail("enter must accept the line")
+    if edit_line(buf, key("escape"))[1] != "escape":
+        fail("escape must back out of the line")
+    if edit_line(buf, Event("mouse", "left", 1, 1)) != (buf, None):
+        fail("a click must not change the line")
 
 
 def check_hit_boxes(fail):
@@ -154,7 +192,8 @@ def check_fits_the_window(fail):
         for cfg in (_cfg(), _cfg(mode="audio")):
             for problem in (None, "Startup found problems — see the log"):
                 layout = build_layout(cfg, width=80, height=height,
-                                      problem=problem)
+                                      problem=problem,
+                                      notice="Downloads will be saved to X")
                 if len(layout.lines) > height:
                     fail(f"[{cfg['mode']} @ {height} rows] layout is "
                          f"{len(layout.lines)} lines and would scroll")
@@ -230,9 +269,17 @@ def check_navigation(fail):
         got = app._handle_event(cfg, layout, focus, Event("key", "1", 0, 0))
         if got != "single":
             fail(f"pressing 1 returned {got!r}, expected 'single'")
+        # Esc is "back" everywhere else, so on the main menu it asks first
+        # instead of closing the app on one stray press.
         got = app._handle_event(cfg, layout, focus, Event("key", "escape", 0, 0))
+        if got != "quit":
+            fail(f"escape on the main menu returned {got!r}, expected 'quit'")
+        got = app._handle_event(cfg, layout, focus, Event("key", "0", 0, 0))
         if got != "exit":
-            fail("escape must leave the app")
+            fail("0 must still exit without asking")
+        got = app._handle_event(cfg, layout, focus, Event("key", "Q", 0, 0))
+        if got != "quit":
+            fail("an upper-case Q must work like q")
 
         # A click on an option applies it and moves the focus there.
         cfg = _cfg()
@@ -343,23 +390,149 @@ def check_panels(fail):
     if kinds != ["settings", "action", "action"]:
         fail(f"panel rows are {kinds}, expected one settings row then two actions")
 
+    # Submenus keep their number keys, so advice like "menu [4] -> [1]" still
+    # works: the number is drawn, it is inside the click box, and pressing it
+    # picks the action.
+    numbered = [("browser", "Set login browser", "a hint", "1"),
+                ("back", "Back", "", "0")]
+    for width in (60, 80):
+        panel = build_panel("Login & Browser", "", [], numbered, {},
+                            width=width, height=25)
+        for name, label, _, number in numbered:
+            hit = next((h for h in panel.hits
+                        if h.target == ("action", name, None)), None)
+            if hit is None:
+                fail(f"[numbered {width}] {name} is not clickable")
+                continue
+            drawn = plain(panel.lines[hit.y])[hit.x0:hit.x1 + 1]
+            if not drawn.startswith(f"[{number}] {label}"):
+                fail(f"[numbered {width}] {name} box covers {drawn!r}")
+    focus = {"row": 0, "col": 0}
+    numbers = [(a[3], a[0]) for a in numbered]
+    got = handle_event(panel, focus, Event("key", "0", 0, 0), {}.get,
+                       lambda k, v: None, number_actions=numbers)
+    if got != "back":
+        fail(f"pressing 0 on a numbered panel gave {got!r}, expected 'back'")
+    got = handle_event(panel, focus, Event("key", "escape", 0, 0), {}.get,
+                       lambda k, v: None, number_actions=numbers)
+    if got != "cancel":
+        fail("escape on a panel must go back")
+
+
+class _ScriptedScreen:
+    """Stands in for the terminal: no drawing, keys from a script."""
+    keys = []
+
+    def __init__(self, text=False):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def render(self, lines):
+        pass
+
+    def read_event(self):
+        if not _ScriptedScreen.keys:
+            raise AssertionError("the flow wanted more keys than scripted")
+        name = _ScriptedScreen.keys.pop(0)
+        return Event("key", name, 0, 0)
+
+
+def check_escape_flows(fail):
+    """Esc backs out of the real flows, not just the line editor.
+
+    The report that started this: a pasted-URL prompt nobody could leave
+    without closing the app. These drive the actual functions with scripted
+    keys, so a step loop or a return value wired the wrong way shows up here.
+    """
+    import contextlib
+    import io
+
+    from mediagrabber import firstrun, panel, screen
+
+    def press(*names):
+        _ScriptedScreen.keys = list(names)
+
+    patches = [(m, "Screen", _ScriptedScreen) for m in (screen, panel, app)]
+    patches += [(m, "is_interactive", lambda: True)
+                for m in (screen, panel, firstrun, app)]
+    patches += [(app, "download_single",
+                 lambda *a, **k: fail("Esc at Paste URL still downloaded")
+                 or ("", False, "stub")),
+                (app, "edit_urls", lambda: None),
+                (firstrun, "save_config", lambda cfg: None),
+                (app, "save_config", lambda cfg: None)]
+    saved = [(m, n, getattr(m, n)) for m, n, _ in patches]
+    for m, n, v in patches:
+        setattr(m, n, v)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            press("escape")
+            if app.process_single(_cfg()) is not None:
+                fail("Esc at Paste URL must go back to the menu quietly")
+
+            # Paste, Esc out of the path prompt, land back on the choices,
+            # then keep the current folder.
+            press("1", "escape", "0")
+            got = firstrun.ask_output_folder(_cfg())
+            if not (isinstance(got, str) and "Downloads go to" in got):
+                fail(f"Esc at the folder prompt should return to the choices; got {got!r}")
+            if _ScriptedScreen.keys:
+                fail("the folder screen stopped before using every key")
+
+            # Wizard: start, Esc on the folder step goes back to the welcome,
+            # Esc there leaves without marking setup as done.
+            cfg = _cfg(setup_done=False)
+            press("1", "escape", "escape")
+            if firstrun.run_setup(cfg) is not None:
+                fail("Esc back out of the wizard must leave it")
+            if cfg["setup_done"]:
+                fail("leaving the wizard with Esc must not mark setup done")
+            if _ScriptedScreen.keys:
+                fail("the wizard did not step back to the welcome screen")
+
+            press("escape")
+            if app.run_action("quit", _cfg()) is not None:
+                fail("Esc at 'Exit MediaGrabber?' must keep the app open")
+            press("left", "down", "enter")
+            if app.run_action("quit", _cfg()) is not app.EXIT:
+                fail("confirming 'Exit MediaGrabber?' must exit")
+
+            press("0")
+            if app.edit_batch(_cfg()) is not None:
+                fail("Back on the batch-list panel must return to the menu")
+
+            press("escape")
+            panel.pause()                     # must return, not hang
+    except AssertionError as e:
+        fail(str(e))
+    finally:
+        for m, n, v in saved:
+            setattr(m, n, v)
+
 
 def main():
     failures = []
     fail = failures.append
 
     check_decoding(fail)
+    check_line_editing(fail)
     check_hit_boxes(fail)
     check_fits_the_window(fail)
     check_panels(fail)
     check_mode_reshapes(fail)
     check_navigation(fail)
+    check_escape_flows(fail)
     check_fallback(fail)
 
-    print("Checked escape/mouse decoding, every option's click box in both "
-          "modes at three widths, fitting into a 25-row window, row "
-          "reshaping, focus movement, the wizard/browser panels and the "
-          "piped fallback.")
+    print("Checked escape/mouse decoding, line editing, every option's click "
+          "box in both modes at three widths, fitting into a 25-row window, "
+          "row reshaping, focus movement, the wizard/browser/numbered panels "
+          "and the piped fallback.")
     print("=" * 60)
     if failures:
         print("FAILURES:")

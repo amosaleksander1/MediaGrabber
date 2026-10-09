@@ -43,6 +43,12 @@ MARK_ON, MARK_OFF = ("▣", "▢") if _renderable("▣▢") else ("(*)", "( )")
 
 _LOG_FILE = None
 
+#: Set by the command line. An AI agent or a script is on the other end, and a
+#: question it cannot see hangs the run; an agent's stdin can even be a real
+#: terminal, so waiting for EOF is not a safe substitute. Every spot that would
+#: ask something checks this and takes the no-answer path instead.
+NO_PROMPTS = False
+
 #: While true, routine output goes to the session log only. Startup has a lot
 #: to say and almost none of it is news — checking five tools that are all fine
 #: pushed the title off the screen. The rule is deliberately "everything except

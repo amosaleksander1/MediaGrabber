@@ -41,6 +41,8 @@ jobs:
         run: python tests/test_bridge.py
       - name: Menu input and click map
         run: python tests/test_menu.py
+      - name: Command line
+        run: python tests/test_cli.py
 
   build:
     needs: test
@@ -128,6 +130,9 @@ jobs:
           # The menu needs stdin; feeding it "0" proves the binary starts,
           # renders and exits cleanly on this platform.
           printf '0\n' | ./dist/${{ matrix.binary }} || true
+          # Arguments route to the command line instead; unlike the line
+          # above, a failure here fails the build.
+          ./dist/${{ matrix.binary }} --version
 
       - uses: actions/upload-artifact@v4
         with:

@@ -29,12 +29,14 @@ from collections import namedtuple
 from .platform_support import IS_WIN
 
 #: kind is "key", "mouse" or "resize".
-#: name is "up"/"down"/"left"/"right"/"enter"/"space"/"escape"/"quit" or a
-#: single character. x/y are 0-based columns/rows from the top-left of the
+#: name is "up"/"down"/"left"/"right"/"enter"/"space"/"escape"/"backspace" or
+#: a single character in the case it was typed — a pasted URL is
+#: case-sensitive, so lowering is left to whoever matches shortcut keys. x/y are 0-based columns/rows from the top-left of the
 #: visible window, and only mean anything for a mouse event.
 Event = namedtuple("Event", "kind name x y")
 
-KEY_NAMES = {"up", "down", "left", "right", "enter", "space", "escape"}
+KEY_NAMES = {"up", "down", "left", "right", "enter", "space", "escape",
+             "backspace"}
 
 
 def is_interactive():
@@ -65,7 +67,7 @@ if IS_WIN:
     MOUSE_EVENT = 0x0002
 
     VK = {0x26: "up", 0x28: "down", 0x25: "left", 0x27: "right",
-          0x0D: "enter", 0x1B: "escape", 0x20: "space"}
+          0x0D: "enter", 0x1B: "escape", 0x20: "space", 0x08: "backspace"}
 
     class _COORD(ctypes.Structure):
         _fields_ = [("X", ctypes.c_short), ("Y", ctypes.c_short)]
@@ -107,9 +109,15 @@ class Screen:
     Always used as a context manager: leaving it restores the console, and the
     caller must leave it before running a download, so scrolling log output and
     the Q-to-cancel check (which expect a cooked terminal) behave normally.
+
+    ``text=True`` is for typing a line rather than driving a menu: no mouse
+    reporting, and the cursor stays visible. On Windows it also leaves
+    quick-edit alone, because with mouse input on, a right-click arrives as a
+    click event instead of pasting — and pasting is how a URL gets typed.
     """
 
-    def __init__(self):
+    def __init__(self, text=False):
+        self._text = text
         self._entered = False
         self._saved_mode = None
         self._saved_term = None
@@ -123,8 +131,9 @@ class Screen:
         else:
             self._enter_posix()
         self._entered = True
-        sys.stdout.write("\033[?25l")          # hide the cursor
-        sys.stdout.flush()
+        if not self._text:
+            sys.stdout.write("\033[?25l")      # hide the cursor
+            sys.stdout.flush()
         return self
 
     def __exit__(self, *exc):
@@ -150,9 +159,11 @@ class Screen:
         mode = wintypes.DWORD()
         ctypes.windll.kernel32.GetConsoleMode(self._in_handle, ctypes.byref(mode))
         self._saved_mode = mode.value
-        new = (mode.value & ~ENABLE_LINE_INPUT & ~ENABLE_ECHO_INPUT
-               & ~ENABLE_QUICK_EDIT)
-        new |= ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS | ENABLE_PROCESSED_INPUT
+        new = mode.value & ~ENABLE_LINE_INPUT & ~ENABLE_ECHO_INPUT
+        new |= ENABLE_PROCESSED_INPUT
+        if not self._text:
+            new &= ~ENABLE_QUICK_EDIT
+            new |= ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS
         ctypes.windll.kernel32.SetConsoleMode(self._in_handle, new)
 
     def _exit_windows(self):
@@ -166,14 +177,16 @@ class Screen:
         fd = sys.stdin.fileno()
         self._saved_term = termios.tcgetattr(fd)
         tty.setraw(fd)
-        # 1000 = click reporting, 1006 = SGR coordinates (works past column 95).
-        sys.stdout.write("\033[?1000h\033[?1006h")
-        sys.stdout.flush()
+        if not self._text:
+            # 1000 = click reporting, 1006 = SGR coordinates (past column 95).
+            sys.stdout.write("\033[?1000h\033[?1006h")
+            sys.stdout.flush()
 
     def _exit_posix(self):
         import termios
-        sys.stdout.write("\033[?1000l\033[?1006l")
-        sys.stdout.flush()
+        if not self._text:
+            sys.stdout.write("\033[?1000l\033[?1006l")
+            sys.stdout.flush()
         if self._saved_term is not None:
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN,
                               self._saved_term)
@@ -224,12 +237,14 @@ class Screen:
                 key = record.Event.KeyEvent
                 if not key.bKeyDown:
                     continue
+                # The character wins over the key code: a pasted "&" can carry
+                # VK 0x26 (Up), and arrow keys carry no character at all.
+                ch = key.UnicodeChar
+                if ch and ch != " " and ch.isprintable():
+                    return Event("key", ch, 0, 0)
                 name = VK.get(key.wVirtualKeyCode)
                 if name:
                     return Event("key", name, 0, 0)
-                ch = key.UnicodeChar
-                if ch and ch.isprintable():
-                    return Event("key", ch.lower(), 0, 0)
                 continue
 
             if record.EventType == MOUSE_EVENT:
@@ -248,6 +263,13 @@ class Screen:
         if not data:
             return None
         if data != b"\x1b":
+            # A non-ASCII character is a lead byte plus continuations; read
+            # them all, or "Música" arrives without its "ú".
+            lead = data[0]
+            more = (3 if lead >= 0xF0 else 2 if lead >= 0xE0
+                    else 1 if lead >= 0xC0 else 0)
+            if more:
+                data += os.read(fd, more)
             return _plain_key(data)
 
         # An escape sequence arrives in one burst; a lone Esc does not.
@@ -271,13 +293,15 @@ def _plain_key(data):
         return Event("key", "enter", 0, 0)
     if data == b" ":
         return Event("key", "space", 0, 0)
+    if data in (b"\x7f", b"\x08"):
+        return Event("key", "backspace", 0, 0)
     if data == b"\x03":                        # Ctrl+C
         raise KeyboardInterrupt
     try:
         ch = data.decode("utf-8", "ignore")
     except Exception:
         return None
-    return Event("key", ch.lower(), 0, 0) if ch.isprintable() else None
+    return Event("key", ch, 0, 0) if ch and ch.isprintable() else None
 
 
 def decode_escape(rest):
@@ -308,3 +332,57 @@ def decode_escape(rest):
         if text.startswith(prefix):
             return Event("key", name, 0, 0)
     return None
+
+
+# ── LINE INPUT ───────────────────────────────────────────────────────────────
+
+def edit_line(buf, event):
+    """Apply one keypress to a line being typed. Returns (buf, done).
+
+    ``done`` is None while typing, "enter" to accept, "escape" to back out.
+    Kept pure so the editing rules can be tested without a terminal.
+    """
+    if event is None or event.kind != "key":
+        return buf, None
+    name = event.name
+    if name in ("enter", "escape"):
+        return buf, name
+    if name == "backspace":
+        return buf[:-1], None
+    if name == "space":
+        return buf + " ", None
+    if len(name) == 1:
+        return buf + name, None
+    return buf, None                        # arrows and the like: ignored
+
+
+def read_line(prompt):
+    """Ask for a line of text that ESC can back out of. None means ESC.
+
+    ``input()`` cannot see Escape — the console swallows it or prints ``^[`` —
+    which left the "Paste URL" prompt with no way back to the menu. Without a
+    real terminal this is plain ``input()``, so piped runs work as before.
+    """
+    if not is_interactive():
+        try:
+            return input(prompt)
+        except EOFError:
+            return None
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    buf = ""
+    with Screen(text=True) as scr:
+        while True:
+            new, done = edit_line(buf, scr.read_event())
+            if done:
+                sys.stdout.write("\r\n")
+                sys.stdout.flush()
+                return new if done == "enter" else None
+            # Echo by hand: raw mode does not, and \b only moves the cursor.
+            if len(new) > len(buf):
+                sys.stdout.write(new[len(buf):])
+            elif len(new) < len(buf):
+                sys.stdout.write("\b \b" * (len(buf) - len(new)))
+            sys.stdout.flush()
+            buf = new

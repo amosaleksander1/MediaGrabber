@@ -155,21 +155,24 @@ if IS_WIN:
     import msvcrt  # noqa: E402  — Windows-only stdlib module
 
 
-def stop_requested():
-    """Non-blocking check for the user pressing Q.
+_ESC = "\x1b"
 
-    Windows reads the raw keyboard buffer, so a bare Q works. POSIX (macOS and
-    Linux) reads a line from stdin, so it is Q-then-Enter.
+
+def stop_requested():
+    """Non-blocking check for the user pressing Q or Esc.
+
+    Windows reads the raw keyboard buffer, so a bare key works. POSIX (macOS
+    and Linux) reads a line from stdin, so it is the key then Enter.
     """
     try:
         if IS_WIN:
             while msvcrt.kbhit():
-                if msvcrt.getwch().lower() == "q":
+                if msvcrt.getwch().lower() in ("q", _ESC):
                     return True
         else:
             import select
             r, _, _ = select.select([sys.stdin], [], [], 0)
-            if r and sys.stdin.readline().strip().lower() == "q":
+            if r and sys.stdin.readline().strip().lower() in ("q", _ESC):
                 return True
     except Exception:
         pass
@@ -177,7 +180,7 @@ def stop_requested():
 
 
 def stop_hint_text():
-    return "Press Q to stop downloads" + ("" if IS_WIN else " (Q then Enter)")
+    return "Press Q or Esc to stop downloads" + ("" if IS_WIN else " (then Enter)")
 
 
 def set_console_title(title="MediaGrabber"):

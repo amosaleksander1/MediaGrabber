@@ -10,7 +10,7 @@ Layout lives in ``menu``, which stays free of terminal code; raw input lives in
 """
 
 from .menu import build_panel, hit_test
-from .screen import Screen, is_interactive
+from .screen import Screen, is_interactive, read_line
 from .ui import C
 
 
@@ -22,7 +22,7 @@ def handle_event(layout, focus, event, get_current, set_value,
     ``set_value(key, value)`` changes it — passed in rather than assumed, so
     the same handler serves a screen backed by the config file and one backed
     by a dict the caller throws away. ``escape_action`` is what Escape means
-    here: leaving the app on the main menu, abandoning a panel anywhere else.
+    here: going back a screen in a panel, asking to leave on the main menu.
     """
     rows = layout.rows
     if not rows:
@@ -48,7 +48,8 @@ def handle_event(layout, focus, event, get_current, set_value,
             return None
         return first
 
-    name = event.name
+    # Keys arrive in the case they were typed; shortcuts do not care.
+    name = event.name.lower() if len(event.name) == 1 else event.name
 
     if name in ("up", "down"):
         step = -1 if name == "up" else 1
@@ -82,12 +83,18 @@ def run_panel(title, note, groups, values, actions, on_change=None):
 
     ``values`` is updated in place as the user chooses, and ``on_change`` is
     called with (key, value) if the caller needs to react — persisting the
-    choice, say. Returns the chosen action's name, or "cancel" for Escape.
+    choice, say. An action may carry a fourth element, its number key. Returns
+    the chosen action's name, or "cancel" for Escape.
 
-    Requires a real terminal; callers check ``is_interactive()`` first and
-    offer something typed when there is not one.
+    Without a real terminal, a panel of actions only is offered as a typed
+    numbered list, so piped runs still reach every screen. A panel with radio
+    rows has no typed form; callers with one check ``is_interactive()`` first.
     """
+    if not is_interactive():
+        return _typed_panel(title, note, actions) if not groups else "cancel"
+
     focus = {"row": 0, "col": 0}
+    numbers = [(a[3], a[0]) for a in actions if len(a) > 3]
 
     def setter(key, value):
         values[key] = value
@@ -102,9 +109,31 @@ def run_panel(title, note, groups, values, actions, on_change=None):
             event = scr.read_event()
             if event is None:
                 continue
-            action = handle_event(layout, focus, event, values.get, setter)
+            action = handle_event(layout, focus, event, values.get, setter,
+                                  number_actions=numbers)
             if action:
                 return action
+
+
+def _typed_panel(title, note, actions):
+    """The same choices as a numbered list, answered with a typed key."""
+    print(f"\n  {C.BOLD}{C.CYAN}{title}{C.RESET}")
+    if note:
+        print(f"  {C.DIM}{note}{C.RESET}")
+    print()
+    keys = {}
+    for i, action in enumerate(actions, 1):
+        name, label, hint = action[:3]
+        key = action[3] if len(action) > 3 else str(i)
+        keys[key] = name
+        print(f"  {C.GREEN}[{key}]{C.RESET} {label}"
+              + (f"  {C.DIM}{hint}{C.RESET}" if hint else ""))
+    print()
+    try:
+        choice = input(f"  {C.CYAN}#{C.RESET} ").strip().lower()
+    except EOFError:
+        return "cancel"
+    return keys.get(choice, "cancel")
 
 
 def confirm(question, note="", default_no=True):
@@ -126,8 +155,15 @@ def say(*lines):
     print()
 
 
-def pause(message="Press Enter to continue..."):
+def pause(message="Enter or Esc: back to the menu"):
+    """Hold the screen so output can be read. Enter and Esc both carry on.
+
+    Does nothing without a real terminal: piped output already scrolls, and a
+    pause there would swallow the next line of scripted input.
+    """
+    if not is_interactive():
+        return
     try:
-        input(f"  {C.DIM}{message}{C.RESET}")
+        read_line(f"  {C.DIM}{message}{C.RESET}")
     except (EOFError, KeyboardInterrupt):
         pass

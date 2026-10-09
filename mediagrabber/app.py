@@ -1,5 +1,6 @@
 """Menu loop and top-level entry point."""
 
+import sys
 import traceback
 from pathlib import Path
 
@@ -10,18 +11,20 @@ from .config import (CONFIG_FILE, COOKIES_FILE, LOGS_DIR, OUTPUT_DIR,
 from .cookies import detect_installed_browsers
 from .download import DownloadStopped, download_single
 from .menu import ACTIONS, build_layout, format_status, settings_rows
-from .panel import handle_event
+from .panel import confirm, handle_event, pause, run_panel
 from .nativehost import (CHROME_EXTENSION_ID, bridge_binary, register,
                          status, unregister)
-from .firstrun import choose_browser, needs_setup, run_setup
-from .platform_support import (copy_path_hint, enable_ansi,
-                               normalise_pasted_path, open_path,
-                               pick_folder_dialog, set_console_title,
+from .firstrun import ask_output_folder, choose_browser, needs_setup, run_setup
+from .platform_support import (enable_ansi, open_path, set_console_title,
                                stop_hint_text)
-from .screen import Screen, is_interactive
+from .screen import Screen, is_interactive, read_line
 from .tools import run_updates, tools_present
 from .ui import (C, MARK_OFF, MARK_ON, banner, init_logging, log, log_file,
                  quiet_output, rule)
+
+#: What an action returns when the app should close. Everything else an action
+#: returns is a one-line notice for the menu, or None for nothing to say.
+EXIT = object()
 
 # ── URL FILE ─────────────────────────────────────────────────────────────────
 
@@ -58,6 +61,27 @@ def edit_urls():
     except Exception as e:
         log(f"Could not open the file ({e}). Edit it yourself at: {URLS_FILE}",
             "WARN")
+
+
+def edit_batch(cfg):
+    """Open the list, then wait: the user is off in another window typing.
+
+    Going straight back to the menu would leave them to remember that [2]
+    is the next step; offering it here is the one place a pause earns itself.
+    """
+    edit_urls()
+    if not is_interactive():
+        return None
+    choice = run_panel(
+        "Add your links to the batch list",
+        f"{URLS_FILE.name} is open in your text editor. Paste one link per "
+        "line, save the file, then choose:",
+        [], {},
+        [("batch", "Download batch now", "every link in the list", "1"),
+         ("back", "Back to menu", "", "0")])
+    if choice == "batch":
+        return run_action("batch", cfg)
+    return None
 
 
 # ── SETTINGS SCREENS ─────────────────────────────────────────────────────────
@@ -142,82 +166,22 @@ def download_settings(cfg):
             continue
 
         if choice == "o":
-            change_output_folder(cfg)
+            ask_output_folder(cfg)
         elif choice == "e":
             edit_urls()
         else:
             log("Not one of the options.", "WARN")
 
 
-def change_output_folder(cfg):
-    """Pick where downloads land.
-
-    Pasting is listed first because it is what people actually do: nobody
-    types a path like "D:/3. Dev Kitchen/yt-dlp" by hand correctly, and the
-    file manager will hand them the whole thing on the clipboard.
-    """
-    current = cfg.get("output_dir", OUTPUT_DIR)
-    print()
-    print(f"  {C.BOLD}{C.CYAN}Change Output Folder{C.RESET}")
-    print(f"  {C.DIM}Current: {current}{C.RESET}")
-    print()
-    print(f"  {C.GREEN}[1]{C.RESET} Paste a folder path  "
-          f"{C.DIM}(copied from your file manager){C.RESET}")
-    print(f"  {C.GREEN}[2]{C.RESET} Browse with a folder picker")
-    print(f"  {C.GREEN}[3]{C.RESET} Reset to the default folder")
-    print(f"  {C.DIM}[0] Cancel{C.RESET}")
-    print()
-    try:
-        choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
-    except EOFError:
-        return
-
-    if choice == "1":
-        print()
-        print(f"  {C.BOLD}How to copy a folder's path{C.RESET}")
-        print(f"  {C.DIM}{copy_path_hint()}{C.RESET}")
-        print(f"  {C.DIM}Quotes are fine — paste exactly what you copied.{C.RESET}")
-        print()
-        try:
-            typed = input(f"  {C.CYAN}Paste the folder path:{C.RESET} ")
-        except EOFError:
-            return
-        path = normalise_pasted_path(typed)
-        if path is None:
-            log("Nothing was pasted — the output folder is unchanged.", "WARN")
-            return
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-            cfg["output_dir"] = str(path)
-            save_config(cfg)
-            log(f"Downloads will be saved to: {path}", "OK")
-        except Exception as e:
-            log(f"That folder cannot be used: {e}", "ERROR")
-
-    elif choice == "2":
-        picked = pick_folder_dialog(current)
-        if picked:
-            cfg["output_dir"] = picked
-            save_config(cfg)
-            log(f"Downloads will be saved to: {picked}", "OK")
-        else:
-            log("No folder selected (or no picker on this system) — "
-                "use option [1] and paste the path instead.", "WARN")
-
-    elif choice == "3":
-        cfg["output_dir"] = OUTPUT_DIR
-        save_config(cfg)
-        log(f"Output folder reset to default: {OUTPUT_DIR}", "OK")
-
-
 # ── BATCH / SINGLE ───────────────────────────────────────────────────────────
 
 def process_batch(cfg):
+    """Download every link in urls.txt. Returns [(url, ok, message), ...]."""
     urls = read_urls()
     if not urls:
         log("No URLs found in urls.txt — add some and try again.", "WARN")
         log(f"File location: {URLS_FILE}", "INFO")
-        return
+        return []
 
     total = len(urls)
     log(f"Found {total} URL(s) to process", "INFO")
@@ -258,23 +222,31 @@ def process_batch(cfg):
     elif not stopped:
         clear_urls()
         log("All downloads succeeded. urls.txt cleared.", "OK")
+    return results
 
 
 def process_single(cfg):
+    """Ask for one link and download it. Esc at the prompt goes back."""
     print()
-    url = input(f"  {C.CYAN}Paste URL:{C.RESET} ").strip()
+    url = read_line(f"  {C.CYAN}Paste URL{C.RESET} {C.DIM}(Esc to go back):{C.RESET} ")
+    if url is None:
+        return None
+    url = url.strip()
     if not url:
-        log("No URL entered.", "WARN")
-        return
+        return "No URL entered."
 
     log(f"Format: {format_status(cfg)}", "INFO")
     rule()
     log(stop_hint_text(), "INFO")
     try:
-        download_single(url, cfg, 1, 1)
+        _, ok, msg = download_single(url, cfg, 1, 1)
     except DownloadStopped:
         log("Download stopped by user.", "WARN")
+        rule()
+        return "Download stopped."
     rule()
+    pause()
+    return f"Downloaded: {url}" if ok else f"Download failed: {msg}"
 
 
 # ── MAIN ─────────────────────────────────────────────────────────────────────
@@ -289,26 +261,23 @@ def connect_extension(cfg):
     browsers = detect_installed_browsers()
     if not browsers:
         log("No supported browsers detected.", "WARN")
-        return
+        return "No supported browsers detected."
 
     binary = bridge_binary()
-    print(f"\n  {C.BOLD}{C.CYAN}Browser extension bridge{C.RESET}")
-    print(f"  {C.DIM}{'-' * 45}{C.RESET}")
-    print(f"  Bridge: {C.DIM}{binary}{C.RESET}")
+    states = ", ".join(f"{b.title()}: {'connected' if ok else 'not connected'}"
+                       for b, ok, _ in status(browsers))
+    note = f"{states}.   Bridge: {binary}"
     if not binary.exists():
-        log("Bridge program not found next to the app — rebuild with BUILD.bat "
-            "or run from source.", "WARN")
+        note += ("   ! Bridge program not found next to the app - rebuild "
+                 "with BUILD.bat or run from source.")
 
-    for browser, ok, detail in status(browsers):
-        mark = f"{C.GREEN}connected{C.RESET}" if ok else f"{C.DIM}not connected{C.RESET}"
-        print(f"  {browser:<10} {mark}  {C.DIM}{detail}{C.RESET}")
+    choice = run_panel("Browser extension bridge", note, [], {},
+                       [("connect", "Connect these browsers", "", "1"),
+                        ("disconnect", "Disconnect", "", "2"),
+                        ("back", "Back", "", "0")])
 
-    print(f"\n  {C.GREEN}[1]{C.RESET} Connect these browsers")
-    print(f"  {C.GREEN}[2]{C.RESET} Disconnect")
-    print(f"  {C.DIM}[0] Cancel{C.RESET}\n")
-    choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
-
-    if choice == "1":
+    if choice == "connect":
+        print()
         for browser, ok, detail in register(browsers):
             log(f"  {browser}: {'registered' if ok else 'failed'} — {detail}",
                 "OK" if ok else "ERROR")
@@ -318,75 +287,100 @@ def connect_extension(cfg):
         log("  Firefox:  install the signed .xpi from the MediaGrabber release", "INFO")
         log("Then click the extension and choose 'Send my login to MediaGrabber'.",
             "INFO")
-    elif choice == "2":
+        pause("Enter or Esc: back")
+        return "Browsers connected - load the extension to finish."
+    if choice == "disconnect":
         for browser, ok, detail in unregister(browsers):
             log(f"  {browser}: {detail}", "OK" if ok else "INFO")
+        return "Extension bridge disconnected."
+    return None
 
 
 def login_and_browser(cfg):
     """Everything about proving who you are to a site, in one place."""
+    msg = ""
     while True:
         source = "cached file" if COOKIES_FILE.exists() else "none saved"
-        print(f"\n  {C.BOLD}{C.CYAN}Login & Browser{C.RESET}")
-        print(f"  {C.DIM}{'─' * 45}{C.RESET}")
-        print(f"  Cookie browser: {C.WHITE}{cfg.get('cookies_browser', 'auto')}{C.RESET}"
-              f"   Saved login: {C.WHITE}{source}{C.RESET}\n")
-        print(f"  {C.GREEN}[1]{C.RESET} Set login cookie browser")
-        print(f"  {C.GREEN}[2]{C.RESET} Connect browser extension  "
-              f"{C.DIM}(hands your login over directly){C.RESET}")
-        print(f"  {C.GREEN}[3]{C.RESET} Checkup  {C.DIM}(tools + login){C.RESET}")
-        print(f"  {C.GREEN}[4]{C.RESET} Delete saved login cookies")
-        print(f"  {C.DIM}[0] Back{C.RESET}\n")
-        try:
-            choice = input(f"  {C.CYAN}#{C.RESET} ").strip()
-        except EOFError:
-            return
+        note = (f"Login browser: {cfg.get('cookies_browser', 'auto')}   "
+                f"Saved login: {source}")
+        if msg:
+            note += f"   > {msg}"
+        choice = run_panel(
+            "Login & Browser", note, [], {},
+            [("browser", "Set login browser", "the one you use for Instagram", "1"),
+             ("extension", "Connect browser extension",
+              "hands your login over directly", "2"),
+             ("checkup", "Checkup", "tools + login", "3"),
+             ("delete", "Delete saved login cookies", "", "4"),
+             ("back", "Back", "", "0")])
 
-        if choice in ("0", ""):
-            return
-        if choice == "1":
-            choose_browser(cfg)
-        elif choice == "2":
-            connect_extension(cfg)
-        elif choice == "3":
-            run_checkup(cfg)
-        elif choice == "4":
+        if choice in ("back", "cancel"):
+            return msg or None
+        if choice == "browser":
+            picked = choose_browser(cfg)
+            msg = f"Login will be read from: {picked}" if picked else ""
+        elif choice == "extension":
+            msg = connect_extension(cfg) or ""
+        elif choice == "checkup":
+            print()
+            ok = run_checkup(cfg)
+            pause("Enter or Esc: back")
+            msg = "Checkup passed." if ok else "Checkup found problems - see the log."
+        elif choice == "delete":
             if COOKIES_FILE.exists():
                 try:
                     COOKIES_FILE.unlink()
-                    log("Saved login cookies deleted. They will be re-exported "
-                        "from your browser when next needed.", "OK")
+                    msg = "Saved login deleted - it is re-exported when next needed."
                 except Exception as e:
-                    log(f"Could not delete cookie cache: {e}", "ERROR")
+                    msg = f"Could not delete the saved login: {e}"
             else:
-                log("No saved cookies to delete.", "INFO")
-        else:
-            log("Not one of the options.", "WARN")
+                msg = "No saved login to delete."
+            log(msg, "INFO")
 
 
 def run_action(name, cfg):
-    """Perform one menu action. Returns True when the app should exit."""
+    """Perform one menu action.
+
+    Returns ``EXIT`` to close the app, otherwise a one-line notice for the menu
+    (or None). Actions whose output is worth reading hold the screen
+    themselves; the rest come straight back with the notice.
+    """
     if name == "single":
-        process_single(cfg)
-    elif name == "batch":
-        process_batch(cfg)
-    elif name == "edit":
-        edit_urls()
-    elif name == "login":
-        login_and_browser(cfg)
-    elif name == "update":
+        return process_single(cfg)
+    if name == "batch":
+        results = process_batch(cfg)
+        if not results:
+            return "Nothing to download - add links with [3] Edit Batch URLs."
+        pause()
+        ok = sum(1 for _, good, _ in results if good)
+        return f"Batch: {ok} succeeded, {len(results) - ok} failed."
+    if name == "edit":
+        return edit_batch(cfg)
+    if name == "login":
+        return login_and_browser(cfg)
+    if name == "update":
         log("Forcing tool update...", "UPDATE")
-        run_updates(cfg, force=True)
-    elif name == "output":
-        open_path(cfg.get("output_dir", OUTPUT_DIR))
-    elif name == "folder":
-        change_output_folder(cfg)
-    elif name == "setup":
-        run_setup(cfg, force=True)
-    elif name == "exit":
+        ok = run_updates(cfg, force=True)
+        pause()
+        return "Tools are up to date." if ok else "Some tools failed to update - see the log."
+    if name == "output":
+        folder = cfg.get("output_dir", OUTPUT_DIR)
+        open_path(folder)
+        return f"Opened {folder}"
+    if name == "folder":
+        return ask_output_folder(cfg)
+    if name == "setup":
+        return run_setup(cfg, force=True)
+    if name == "quit":
+        # Esc means "back" everywhere else, so pressing it once too often must
+        # not close the app outright. [0] still exits without asking.
+        if not confirm("Exit MediaGrabber?"):
+            return None
+        name = "exit"
+    if name == "exit":
         log("Exiting. Goodbye!", "INFO")
-        return True
-    return False
+        return EXIT
+    return None
 
 
 def _handle_event(cfg, layout, focus, event):
@@ -400,10 +394,10 @@ def _handle_event(cfg, layout, focus, event):
                         get_current=cfg.get,
                         set_value=lambda k, v: apply_setting(cfg, k, v),
                         number_actions=[(n, a) for n, a, _, _ in ACTIONS],
-                        escape_action="exit")
+                        escape_action="quit")
 
 
-def _choose_interactively(cfg, focus, problem=None):
+def _choose_interactively(cfg, focus, problem=None, notice=None):
     """Own the terminal until the user picks an action, then give it back.
 
     Raw mode is left before anything runs, because a download scrolls its own
@@ -412,7 +406,8 @@ def _choose_interactively(cfg, focus, problem=None):
     with Screen() as scr:
         while True:
             layout = build_layout(cfg, focus["row"], focus["col"],
-                                  login=login_source(), problem=problem)
+                                  login=login_source(), problem=problem,
+                                  notice=notice)
             scr.render(layout.lines)
             event = scr.read_event()
             if event is None:
@@ -424,29 +419,31 @@ def _choose_interactively(cfg, focus, problem=None):
 
 def _interactive_loop(cfg, problem=None):
     focus = {"row": 0, "col": 0}
+    notice = None
     while True:
         try:
-            action = _choose_interactively(cfg, focus, problem)
+            action = _choose_interactively(cfg, focus, problem, notice)
         except KeyboardInterrupt:
             print()
             log("Interrupted by user. Exiting.", "WARN")
             return
 
         print()
+        notice = None
         try:
-            if run_action(action, cfg):
+            result = run_action(action, cfg)
+            if result is EXIT:
                 return
+            notice = result
         except KeyboardInterrupt:
             print()
             log("Interrupted.", "WARN")
+            notice = "Interrupted."
         except Exception as e:
             log(f"Unexpected error: {e}", "ERROR")
             log(traceback.format_exc(), "ERROR")
-
-        try:
-            input(f"\n  {C.DIM}Press Enter to return to the menu...{C.RESET}")
-        except (EOFError, KeyboardInterrupt):
-            return
+            pause()
+            notice = f"Something went wrong: {e}"
 
 
 def _typed_loop(cfg):
@@ -465,8 +462,11 @@ def _typed_loop(cfg):
             if choice == "s":
                 download_settings(cfg)
             elif choice in by_number:
-                if run_action(by_number[choice], cfg):
+                result = run_action(by_number[choice], cfg)
+                if result is EXIT:
                     break
+                if result:
+                    log(result, "INFO")
             else:
                 log("Invalid choice, try again.", "WARN")
 
@@ -483,7 +483,16 @@ def _typed_loop(cfg):
             log(traceback.format_exc(), "ERROR")
 
 
-def main():
+def main(argv=None):
+    """No arguments: the menu. Any arguments: the command line, for scripts
+    and AI agents (``MediaGrabber --help``)."""
+    if argv is None:
+        # Old macOS hands a Finder-launched app a -psn_ process serial number.
+        argv = [a for a in sys.argv[1:] if not a.startswith("-psn_")]
+    if argv:
+        from .cli import main as cli_main
+        sys.exit(cli_main(argv))
+
     enable_ansi()
     set_console_title("MediaGrabber")
     init_logging(LOGS_DIR)

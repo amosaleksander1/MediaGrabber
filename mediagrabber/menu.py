@@ -230,7 +230,7 @@ def build_panel(title, note, groups, actions, values, focus_row=0,
     means the same thing wherever it lands.
 
     groups:  [(heading, key, [(value, label), ...]), ...]
-    actions: [(name, label, hint), ...]
+    actions: [(name, label, hint), ...] or (name, label, hint, number key)
     values:  {key: currently selected value}
     """
     width = width or screen_width()
@@ -238,7 +238,7 @@ def build_panel(title, note, groups, actions, values, focus_row=0,
 
     rows = ([("settings", key, [o[0] for o in options])
              for _, key, options in groups]
-            + [("action", name, None) for name, _, _ in actions])
+            + [("action", a[0], None) for a in actions])
     focus_row = max(0, min(focus_row, max(0, len(rows) - 1)))
 
     lines, hits = [], []
@@ -256,9 +256,11 @@ def build_panel(title, note, groups, actions, values, focus_row=0,
 
     if groups and actions:
         lines.append("")
-    for name, label, hint in actions:
+    for action in actions:
+        name, label, hint = action[:3]
         emit_action_row(lines, hits, label, name, hint,
                         interactive and row_index == focus_row, row_index,
+                        number=action[3] if len(action) > 3 else None,
                         width=width)
         row_index += 1
 
@@ -266,9 +268,9 @@ def build_panel(title, note, groups, actions, values, focus_row=0,
     if interactive:
         kind = rows[focus_row][0] if rows else "action"
         lines.append(f"{_INDENT}{C.DIM}" + (
-            "up/down move   left/right change   Enter next   or click"
+            "up/down move   left/right change   Esc back   or click"
             if kind == "settings" else
-            "up/down move   Enter choose   or click") + f"{C.RESET}")
+            "up/down move   Enter choose   Esc back   or click") + f"{C.RESET}")
 
     # Trimming here would desync the map, so the note is what gives way.
     if height and len(lines) > height and note:
@@ -279,7 +281,7 @@ def build_panel(title, note, groups, actions, values, focus_row=0,
 
 def build_layout(cfg, focus_row=0, focus_col=0, login="none saved",
                  interactive=True, width=None, with_banner=True,
-                 height=None, problem=None):
+                 height=None, problem=None, notice=None):
     """Render the screen, trimming it until it fits, and map every click box.
 
     The banner is part of the layout so the y coordinates in that map are
@@ -299,7 +301,7 @@ def build_layout(cfg, focus_row=0, focus_col=0, login="none saved",
     while True:
         layout = _compose(cfg, focus_row, focus_col, login, interactive,
                           width or screen_width(), with_banner, problem,
-                          show_footer)
+                          show_footer, notice)
         if not height or len(layout.lines) <= height:
             return layout
         if with_banner:
@@ -311,7 +313,7 @@ def build_layout(cfg, focus_row=0, focus_col=0, login="none saved",
 
 
 def _compose(cfg, focus_row, focus_col, login, interactive, width,
-             with_banner, problem, show_footer):
+             with_banner, problem, show_footer, notice=None):
     lines = list(banner_lines()) if with_banner else []
     hits = []
     rows = navigable_rows(cfg)
@@ -353,13 +355,19 @@ def _compose(cfg, focus_row, focus_col, login, interactive, width,
     if problem:
         lines.append(f"{_INDENT}{C.YELLOW}! {problem}{C.RESET}"[:width + 20])
 
+    # What the last action did. The menu comes straight back after most of
+    # them now, and the repaint would otherwise erase the only confirmation.
+    if notice:
+        room = width - len(_INDENT) - 2
+        lines.append(f"{_INDENT}{C.GREEN}> {notice[:room]}{C.RESET}")
+
     lines.append("")
 
     if interactive:
         row_kind = rows[focus_row][0] if rows else "action"
         keys = ("↑↓ move   ←→ change   Enter next   click anything   0 exit"
                 if row_kind == "settings"
-                else "↑↓ move   Enter run   number keys work too   0 exit")
+                else "↑↓ move   Enter run   number keys work too   Esc exit")
         lines.append(f"{_INDENT}{C.DIM}{keys}{C.RESET}")
 
     return Layout(lines, hits, rows)

@@ -505,17 +505,25 @@ def offer_python_install(ask=True):
         log(f"Please install {what}, then run menu [5] Tools Update.", "INFO")
         return False
 
+    # A script or an AI agent never gets an installer window opened on it.
+    from . import ui
+    if ui.NO_PROMPTS:
+        log(f"Not installing from the command line - run "
+            f"'{' '.join(command)}' yourself, then 'MediaGrabber update'.",
+            "WARN")
+        return False
+
     if ask:
-        prompt = (f"  Run '{' '.join(command)}' now? macOS will open its own "
-                  f"installer window. [y/N] ")
+        from .panel import confirm
         try:
-            answer = input(prompt).strip().lower()
-        except (EOFError, KeyboardInterrupt):
+            yes = confirm(
+                f"Run '{' '.join(command)}' now?",
+                f"Image posts need gallery-dl, which needs {what}. macOS will "
+                "open its own installer window.")
+        except KeyboardInterrupt:
             print()
-            log("No answer - skipping. Run menu [5] when Python is installed.",
-                "WARN")
-            return False
-        if answer not in ("y", "yes"):
+            yes = False
+        if not yes:
             log("Skipped. Image-only posts may fail until Python is "
                 "installed; run menu [5] afterwards.", "WARN")
             return False

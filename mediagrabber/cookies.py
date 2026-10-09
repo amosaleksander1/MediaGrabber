@@ -473,14 +473,25 @@ def _export_via_ytdlp(browser, spec, interactive):
         if locked:
             log(f"{browser.title()} is locking its cookie database — "
                 "cookies can't be read while it runs.", "WARN")
-            if interactive and attempt == 1:
-                try:
-                    input(f"  Close {browser.title()} COMPLETELY, then press Enter to retry... ")
-                    continue
-                except EOFError:
-                    pass
+            if interactive and attempt == 1 and _closed_and_retry(browser):
+                continue
         break
     return False
+
+
+def _closed_and_retry(browser):
+    """Ask the user to close the browser. True when they chose to retry."""
+    from . import ui
+    if ui.NO_PROMPTS:
+        return False
+    from .panel import run_panel
+    return run_panel(
+        f"Close {browser.title()} completely to continue",
+        f"{browser.title()} locks its cookie database while it runs. Close "
+        "every window and its tray icon, then retry.",
+        [], {},
+        [("retry", "Retry", "I have closed it", "1"),
+         ("skip", "Skip", "carry on without a fresh login", "0")]) == "retry"
 
 
 def refresh_cookie_cache(cfg, interactive=True):
@@ -505,12 +516,9 @@ def refresh_cookie_cache(cfg, interactive=True):
             result = export_chrome_cookies_cdp(b, cfg)
             if result is True and cookie_cache_valid():
                 return True
-            if result == CHROME_RUNNING and interactive and attempt == 1:
-                try:
-                    input(f"  Close {b.title()} COMPLETELY (window + tray icon), then press Enter... ")
-                    continue
-                except EOFError:
-                    pass
+            if (result == CHROME_RUNNING and interactive and attempt == 1
+                    and _closed_and_retry(b)):
+                continue
             break
         if cookie_cache_valid():
             log("Using previously cached login cookies (may be stale).", "WARN")

@@ -17,7 +17,9 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 - **Optional browser extension** — hands your login straight to the app, skipping cookie decryption entirely (no Keychain prompt, no Full Disk Access, no closing the browser), and sends the page you are looking at to the download queue
 - **Self-maintaining** — yt-dlp, ffmpeg, Deno and gallery-dl are auto-downloaded for *your* platform and architecture, **all four at once** rather than one after another (242 MB in ~15s on a fast line); update checks run at most every 14 days, so startup is instant
 - **Smart retries** — transient errors retry with backoff; permanent errors (private/removed posts) fail fast; extraction errors from an outdated downloader trigger an automatic tool update + retry
-- **Graceful stop** — press `Q` during downloads (macOS/Linux: `Q` then Enter) to cancel cleanly
+- **Graceful stop** — press `Q` or `Esc` during downloads (macOS/Linux: then Enter) to cancel cleanly
+- **Esc always goes back** — out of any submenu, any wizard step, even the "Paste URL" prompt. On the main menu it asks before exiting
+- **Callable by scripts and AI assistants** — `MediaGrabber download URL --json` downloads without a single question and answers in JSON. See [Scripting & AI agents](#scripting--ai-agents)
 
 ## Download
 
@@ -212,10 +214,72 @@ option or menu entry.
 Choosing Audio removes the resolution row rather than leaving it there doing
 nothing, and switches the format list to the audio formats.
 
+Every submenu — Login & Browser, Change Output Folder, the setup wizard — works
+the same way: arrows and Enter, a click, or the number shown next to an entry.
+**Esc** goes back one screen from anywhere, including the "Paste URL" and
+"Paste the folder path" prompts and each step of the wizard. On the main menu,
+Esc asks before closing the app; `0` exits straight away.
+
+After an action the app goes straight back to the menu and shows what happened
+on its bottom line. It only stops to wait for you when there is something to
+read: download results, the checkup, a tools update, or the extension setup
+steps. Edit Batch URLs waits too, while you add links in your text editor, and
+then offers to download the batch.
+
 The screen redraws in place instead of scrolling, so the menu stays where it is
 between downloads. When the app is piped or its output is redirected
 (`printf '0\n' | MediaGrabber`, CI, a log file), it falls back to the plain
 typed menu above — same numbers, plus `S` for the settings screen.
+
+## Scripting & AI agents
+
+Give MediaGrabber arguments and it skips the menu entirely. It runs one
+command, asks no questions, and exits. That makes it something an AI assistant
+(Claude, ChatGPT, Copilot, a shell script) can call like a tool after it has
+installed the app for you. Run it without arguments and you get the menu
+exactly as before.
+
+```bash
+MediaGrabber download "https://youtu.be/dQw4w9WgXcQ" --json
+MediaGrabber download URL --audio --format mp3 --out ~/Music
+MediaGrabber queue URL1 URL2       # add to urls.txt
+MediaGrabber batch --json          # download everything in urls.txt
+MediaGrabber config get --json
+MediaGrabber config set resolution 1080
+MediaGrabber checkup --json
+MediaGrabber update
+MediaGrabber --help                # every option, formats and resolutions
+```
+
+From source, use `python mediagrabber.py …`. `RUN.bat`, `run.sh` and
+`run.command` pass arguments through as well.
+
+| Command | Does |
+| --- | --- |
+| `download URL… [--audio\|--video] [--format F] [--resolution R] [--out DIR]` | Download now. The options apply to this run only and never change your saved settings. `--format mp3` on its own implies `--audio`. |
+| `batch` | Download every link in `urls.txt`, clearing it when all of them succeed |
+| `queue URL…` | Add links to `urls.txt`, skipping ones already there |
+| `config get [KEY]` / `config set KEY VALUE` | Read or change saved settings. Values are checked, and `1080p`, `on`/`off` are understood |
+| `checkup` | Check the tools and the browser login |
+| `update` | Update yt-dlp, ffmpeg, Deno and gallery-dl now |
+
+**`--json`** prints exactly one object on stdout, and all progress goes to
+stderr:
+
+```json
+{"ok": true, "results": [{"url": "https://…", "ok": true, "message": "OK",
+  "files": ["C:\\Users\\you\\Downloads\\MediaGrabber\\jawed - Me at the zoo.mp3"]}],
+ "output_dir": "C:\\Users\\you\\Downloads\\MediaGrabber"}
+```
+
+**Exit codes:** `0` everything succeeded, `1` something failed (the JSON says
+what), `2` bad arguments. A command line that cannot be parsed at all, such as
+an unknown command, exits `2` with stdout empty and the reason on stderr.
+
+The command line never stops to ask anything. If a login needs a browser
+closed, or Python is missing on an Intel Mac, it takes the no-answer path and
+reports the problem instead. Missing tools are fetched automatically on first
+use.
 
 ## How login works (no password stored)
 
@@ -353,13 +417,14 @@ mediagrabber/
   download.py              the download engine
   checkup.py               health check
   app.py                   menu loop and the actions it runs
+  cli.py                   command line for scripts and AI agents (--json)
   menu.py                  screen layout + what a click at (x, y) means
   screen.py                raw keyboard/mouse input and in-place drawing
   ui.py / net.py / shell.py  output, HTTP, subprocess helpers
 extension/                 browser extension (cookies + send-to-app)
 bridge_main.py             entry point the browser launches
 scripts/check_upstream.py  weekly upstream-asset verification (CI)
-tests/                     platform matrix, media URLs, bridge protocol, menu
+tests/                     platform matrix, media URLs, bridge protocol, menu, CLI
 ```
 
 Adding a platform is deliberately a `platform_support.py` + `tools.py` change; nothing else tests `sys.platform` directly.

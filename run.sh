@@ -3,7 +3,7 @@
 cd "$(dirname "$0")" || exit 1
 
 if [ -x "./MediaGrabber" ]; then
-    exec "./MediaGrabber"
+    exec "./MediaGrabber" "$@"
 fi
 
 for c in python3 python; do
