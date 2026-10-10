@@ -141,6 +141,22 @@ def check_args(fail):
     if "--recode-video" in ig or "best" not in ig or "--yes-playlist" not in ig:
         fail("instagram carousel: expected -f best with --yes-playlist")
 
+    # Video Only: the silent stream when there is one, and the sound stripped
+    # from whatever comes back, so a combined-only site is silent too.
+    for res, pick in (("1080", "bestvideo[height<=1080]/best[height<=1080]/best"),
+                      ("best", "bestvideo/best"), ("worst", "worstvideo/worst")):
+        silent = build_ytdlp_args("https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                                  _cfg("video_only", res))
+        if silent[silent.index("-f") + 1] != pick:
+            fail(f"video only @ {res}: expected -f {pick}")
+        if any("bestaudio" in a or "worstaudio" in a for a in silent):
+            fail(f"video only @ {res}: must not download the audio stream")
+        if "CopyStream:-an" not in silent or "--recode-video" not in silent:
+            fail(f"video only @ {res}: expected the -an strip and the recode")
+    loud = build_ytdlp_args("https://www.youtube.com/watch?v=dQw4w9WgXcQ", _cfg("video"))
+    if "CopyStream:-an" in loud:
+        fail("video / image mode must keep its sound")
+
     audio = build_ytdlp_args("https://x.com/nasa/status/1889912345678", _cfg("audio"))
     if "-x" not in audio:
         fail("audio mode: expected -x")

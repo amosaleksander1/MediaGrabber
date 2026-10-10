@@ -21,8 +21,9 @@ import sys
 from pathlib import Path
 
 from . import APP_VERSION, ui
-from .config import (AUDIO_FORMATS, LOGS_DIR, OUTPUT_DIR, RESOLUTION_OPTIONS,
-                     URLS_FILE, VIDEO_FORMATS, load_config, save_config)
+from .config import (AUDIO_FORMATS, LOGS_DIR, MODES, OUTPUT_DIR,
+                     RESOLUTION_OPTIONS, URLS_FILE, VIDEO_FORMATS, load_config,
+                     save_config)
 
 _VIDEO = [v for v, _ in VIDEO_FORMATS]
 _AUDIO = [v for v, _ in AUDIO_FORMATS]
@@ -33,6 +34,7 @@ examples:
   MediaGrabber download "https://youtu.be/dQw4w9WgXcQ" --json
   MediaGrabber download URL --audio --format mp3 --out ~/Music
   MediaGrabber download URL --resolution 720
+  MediaGrabber download URL --video-only   video without sound
   MediaGrabber queue URL1 URL2          add links to urls.txt
   MediaGrabber batch --json             download everything in urls.txt
   MediaGrabber config get --json
@@ -62,7 +64,7 @@ class UsageError(Exception):
 def _settable():
     from .cookies import browser_order
     return {
-        "mode": ["video", "audio"],
+        "mode": list(MODES),
         "video_format": _VIDEO,
         "audio_format": _AUDIO,
         "resolution": _RESOLUTIONS,
@@ -113,19 +115,24 @@ def coerce(key, raw):
 def _overrides(cfg, args):
     """A copy of cfg with this run's --audio/--format/... applied."""
     run = dict(cfg)
-    if args.audio and args.video:
-        raise UsageError("choose --audio or --video, not both")
+    if args.audio + args.video + args.video_only > 1:
+        raise UsageError("choose one of --audio, --video, --video-only")
     if args.audio:
         run["mode"] = "audio"
     if args.video:
         run["mode"] = "video"
+    if args.video_only:
+        run["mode"] = "video_only"
+    wants_video = args.video or args.video_only
     if args.format:
         fmt = args.format.lower()
         # A format names its mode, so --format mp3 alone means audio.
-        if fmt in _AUDIO and not args.video:
+        if fmt in _AUDIO and not wants_video:
             run["mode"], run["audio_format"] = "audio", fmt
         elif fmt in _VIDEO and not args.audio:
-            run["mode"], run["video_format"] = "video", fmt
+            run["video_format"] = fmt
+            if run["mode"] == "audio":
+                run["mode"] = "video"
         else:
             raise UsageError(f"format {fmt!r} does not fit {run['mode']} mode; "
                              f"video: {', '.join(_VIDEO)}; "
@@ -262,6 +269,8 @@ def build_parser():
     p.add_argument("urls", nargs="+", metavar="URL")
     p.add_argument("--audio", action="store_true", help="audio only, this run")
     p.add_argument("--video", action="store_true", help="video / image, this run")
+    p.add_argument("--video-only", action="store_true",
+                   help="video with no sound, this run")
     p.add_argument("--format", help="file format, e.g. mp4 or mp3 (this run)")
     p.add_argument("--resolution", help="best, worst or a height like 1080 (this run)")
     p.add_argument("--out", help="folder to save into (this run)")

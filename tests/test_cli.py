@@ -102,6 +102,15 @@ def check(fail, tmp):
     if saved != config.DEFAULTS:
         fail("download overrides must not touch the saved config")
 
+    args = cli.build_parser().parse_args(["download", "u", "--video-only",
+                                          "--format", "mkv"])
+    run_cfg = cli._overrides(saved, args)
+    if (run_cfg["mode"], run_cfg["video_format"]) != ("video_only", "mkv"):
+        fail(f"--video-only --format mkv gave {run_cfg['mode']}/{run_cfg['video_format']}")
+    code, got = run_json(fail, "config", "set", "mode", "video_only")
+    if code != 0:
+        fail(f"video_only must be a settable mode, got code {code}")
+
     code, got = run_json(fail, "download", "u", "--format", "mp3", "--video")
     if code != 2:
         fail(f"--video with an audio format must exit 2, got {code}")

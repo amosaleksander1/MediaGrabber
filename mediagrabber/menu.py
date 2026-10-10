@@ -16,7 +16,7 @@ import shutil
 import textwrap
 from collections import namedtuple
 
-from .config import (AUDIO_FORMATS, RESOLUTION_OPTIONS, VIDEO_FORMATS)
+from .config import AUDIO_FORMATS, MODES, RESOLUTION_OPTIONS, VIDEO_FORMATS
 from .platform_support import OS_LABEL, PLATFORM_TAG
 from .ui import C, MARK_OFF, MARK_ON, banner_lines
 
@@ -99,7 +99,8 @@ def short_label(key, value):
     if key == "resolution":
         return {"best": "Best", "worst": "Worst"}.get(value, f"{value}p")
     if key == "mode":
-        return {"video": "Video / Image", "audio": "Audio"}.get(value, value)
+        return {"video": "Video / Image", "video_only": "Video Only",
+                "audio": "Audio"}.get(value, value)
     if key == "auto_update":
         return "On" if value else "Off"
     return str(value).upper()
@@ -110,7 +111,9 @@ def format_status(cfg):
     if cfg.get("mode", "video") == "audio":
         return f"Audio ({cfg.get('audio_format', 'mp3').upper()})"
     res = short_label("resolution", cfg.get("resolution", "best"))
-    return f"Video / Image ({cfg.get('video_format', 'mp4').upper()} @ {res})"
+    label = short_label("mode", cfg.get("mode", "video"))
+    silent = ", no sound" if cfg.get("mode") == "video_only" else ""
+    return f"{label} ({cfg.get('video_format', 'mp4').upper()} @ {res}{silent})"
 
 
 def settings_rows(cfg):
@@ -121,7 +124,7 @@ def settings_rows(cfg):
     instead of leaving dead options on it.
     """
     rows = [("Mode", "mode",
-             [(v, short_label("mode", v)) for v in ("video", "audio")])]
+             [(v, short_label("mode", v)) for v in MODES])]
 
     if cfg.get("mode", "video") == "audio":
         rows.append(("File format", "audio_format",

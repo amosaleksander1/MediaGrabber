@@ -170,6 +170,15 @@ def build_ytdlp_args(url, cfg, resolution_override=None, out_dir_override=None):
             args += ["-f", "worstvideo+worstaudio/worst"]
         else:
             args += ["-f", f"bestvideo[height<={res}]+bestaudio/best[height<={res}]/best"]
+        if mode == "video_only":
+            # Take the silent video stream rather than downloading sound only
+            # to throw it away, and strip the audio from whatever comes back
+            # anyway: a site with only combined files has no silent stream.
+            pick = {"best": "bestvideo/best", "worst": "worstvideo/worst"}.get(
+                res, f"bestvideo[height<={res}]/best[height<={res}]/best")
+            args[args.index("-f") + 1] = pick
+            args += ["--use-postprocessor", "FFmpegCopyStream",
+                     "--ppa", "CopyStream:-an"]
 
     args += ["--retries", str(cfg.get("max_retries", 3)), "--no-mtime", "--newline"]
     args.append(url)

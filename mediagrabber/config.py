@@ -114,6 +114,10 @@ RESOLUTION_OPTIONS = [
     ("worst", "Worst (smallest file)"),
 ]
 
+#: Download modes, in the order the menu shows them. "video_only" is video
+#: with the sound stripped; it shares the video formats and resolutions.
+MODES = ("video", "video_only", "audio")
+
 DEFAULTS = {
     "mode": "video",
     "video_format": "mp4",
@@ -158,7 +162,7 @@ def load_config():
     # v3.3 folded the old "media" mode into Video/Image, which now fetches
     # whatever a post holds. A config saved before that would otherwise select
     # a mode nothing knows about, leaving the app with no working format.
-    if cfg.get("mode") not in ("video", "audio"):
+    if cfg.get("mode") not in MODES:
         cfg["mode"] = "video"
 
     # v3.4 names files "[Address] - [Caption]" and settled on five caption

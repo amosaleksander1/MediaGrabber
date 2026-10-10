@@ -118,7 +118,7 @@ def check_hit_boxes(fail):
     exercise that.
     """
     for width in (60, 80, 120):
-        for cfg in (_cfg(), _cfg(mode="audio")):
+        for cfg in (_cfg(), _cfg(mode="video_only"), _cfg(mode="audio")):
             _check_one_layout(fail, cfg, width)
 
 
@@ -189,7 +189,7 @@ def check_fits_the_window(fail):
     real configuration, not a corner case.
     """
     for height in (25, 30, 40):
-        for cfg in (_cfg(), _cfg(mode="audio")):
+        for cfg in (_cfg(), _cfg(mode="video_only"), _cfg(mode="audio")):
             for problem in (None, "Startup found problems — see the log"):
                 layout = build_layout(cfg, width=80, height=height,
                                       problem=problem,
@@ -243,8 +243,9 @@ def check_navigation(fail):
 
         # Right on the mode row changes the value immediately.
         app._handle_event(cfg, layout, focus, Event("key", "right", 0, 0))
-        if cfg["mode"] != "audio":
-            fail("right on the mode row should have selected audio")
+        if cfg["mode"] != "video_only":
+            fail("right on the mode row should have selected Video Only, "
+                 "which sits between Video / Image and Audio")
         if not saved:
             fail("changing a setting must persist it")
 

@@ -9,7 +9,7 @@ Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [gallery-dl](https://git
 - **Guided first run** — a short setup asks where downloads go and which browser holds your login, and every menu entry says what it is for. Re-runnable any time from `[8] Setup Wizard`
 - **Batch or single downloads** — queue links in `urls.txt` or paste one at a time
 - **Click-and-arrow menu** — mode, format and resolution sit on the main screen as rows of radio buttons you arrow through or click, and the screen redraws in place instead of scrolling away. Falls back to the plain numbered menu when there is no real terminal
-- **Two modes** — *Video / Image* (MP4/MKV/WebM/… with resolution capping, and the images in a post) or *Audio* (MP3/FLAC/Opus/…). Choosing Audio reshapes the screen: the audio formats replace the video ones and the resolution row disappears
+- **Three modes** — *Video / Image* (MP4/MKV/WebM/… with resolution capping, and the images in a post), *Video Only* (the same video with the sound removed) or *Audio* (MP3/FLAC/Opus/…). Choosing Audio reshapes the screen: the audio formats replace the video ones and the resolution row disappears
 - **Images, not just video** — posts on Instagram, TikTok, X/Twitter, Reddit, Pinterest and Threads are recognised, named after the account and caption, and downloaded whole. Image-only posts that yt-dlp cannot touch are picked up by gallery-dl automatically, on any site it supports
 - **Names you can read** — every download is `[Address] - [Caption]`: `@pinkbutter - pink ketemu butter yellow.jpg`, `Rick Astley - Never Gonna Give You Up.mp4`. The account keeps posts from different people apart; the caption keeps posts from the same person apart.
 - **Instagram & TikTok carousels** — detects real multi-item posts and downloads *all* slides (images **and** videos) into a subfolder, with every slide numbered in order and sharing the folder's name (`@pinkbutter - pink ketemu butter yellow - 01.jpg`, `- 02.mp4`, …). Single reels/posts download normally — no folder.
@@ -177,7 +177,7 @@ and change it in place, or click it:
 
 ```
 DOWNLOAD SETTINGS
-  Mode          ▣ Video / Image   ▢ Audio
+  Mode          ▣ Video / Image   ▢ Video Only   ▢ Audio
   File format   ▣ MP4   ▢ MKV   ▢ WebM   ▢ AVI   ▢ MOV   ▢ FLV   ▢ TS
   Resolution    ▣ Best  ▢ 2160p  ▢ 1440p  ▢ 1080p  ▢ 720p  ▢ 480p  …
   Auto-update   ▣ On    ▢ Off
@@ -256,7 +256,7 @@ From source, use `python mediagrabber.py …`. `RUN.bat`, `run.sh` and
 
 | Command | Does |
 | --- | --- |
-| `download URL… [--audio\|--video] [--format F] [--resolution R] [--out DIR]` | Download now. The options apply to this run only and never change your saved settings. `--format mp3` on its own implies `--audio`. |
+| `download URL… [--audio\|--video\|--video-only] [--format F] [--resolution R] [--out DIR]` | Download now. The options apply to this run only and never change your saved settings. `--format mp3` on its own implies `--audio`. |
 | `batch` | Download every link in `urls.txt`, clearing it when all of them succeed |
 | `queue URL…` | Add links to `urls.txt`, skipping ones already there |
 | `config get [KEY]` / `config set KEY VALUE` | Read or change saved settings. Values are checked, and `1080p`, `on`/`off` are understood |
@@ -376,7 +376,7 @@ Regular links (YouTube etc.) are unaffected and go straight into the output fold
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `mode` | `video` | `video` or `audio` |
+| `mode` | `video` | `video`, `video_only` (no sound) or `audio` |
 | `video_format` | `mp4` | container for video mode |
 | `audio_format` | `mp3` | format for audio mode (`-x`) |
 | `resolution` | `best` | `best`, `worst`, or a height cap like `1080` |
