@@ -146,18 +146,10 @@ def _overrides(cfg, args):
 
 # ── COMMANDS ─────────────────────────────────────────────────────────────────
 
-def _files(folder):
-    # ponytail: rglob diff, slow on a huge output folder; have download_single
-    # return the paths it wrote if that ever bites.
-    root = Path(folder)
-    if not root.exists():
-        return set()
-    return {p for p in root.rglob("*") if p.is_file()}
-
-
 def _download(urls, cfg):
     """Download each URL, noting which new files it produced."""
     from .download import DownloadStopped, download_single
+    from .download import files_under as _files
     from .tools import run_updates
 
     out = cfg.get("output_dir", OUTPUT_DIR)

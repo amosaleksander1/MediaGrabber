@@ -7,15 +7,15 @@ import time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from .config import (BROWSER_UA, DENO_EXE, NO_VIDEO_MARKERS, OUTPUT_DIR,
-                     PERMANENT_ERRORS, TOOLS_DIR, TOOL_FAILURE_MARKERS,
-                     YTDLP_EXE)
+from .config import (BROWSER_UA, DENO_EXE, FFMPEG_EXE, NO_VIDEO_MARKERS,
+                     OUTPUT_DIR, PERMANENT_ERRORS, TOOLS_DIR,
+                     TOOL_FAILURE_MARKERS, YTDLP_EXE)
 from .cookies import cookie_args
 from .platform_support import stop_requested
 from .probe import (is_carousel_candidate, is_post_url, needs_login,
                     post_base_name, probe_post, tiktok_video_id,
                     build_name, MAX_CAPTION_WORDS)
-from .shell import popen_stream, stop_process
+from .shell import popen_stream, run_quiet, stop_process
 from .tools import (gallerydl_available, gallerydl_command, repair_gallerydl,
                     run_updates)
 from .ui import C, log
@@ -172,13 +172,11 @@ def build_ytdlp_args(url, cfg, resolution_override=None, out_dir_override=None):
             args += ["-f", f"bestvideo[height<={res}]+bestaudio/best[height<={res}]/best"]
         if mode == "video_only":
             # Take the silent video stream rather than downloading sound only
-            # to throw it away, and strip the audio from whatever comes back
-            # anyway: a site with only combined files has no silent stream.
+            # to throw it away. Whatever still carries sound — a combined-only
+            # site, a carousel, gallery-dl — is stripped in download_single.
             pick = {"best": "bestvideo/best", "worst": "worstvideo/worst"}.get(
                 res, f"bestvideo[height<={res}]/best[height<={res}]/best")
             args[args.index("-f") + 1] = pick
-            args += ["--use-postprocessor", "FFmpegCopyStream",
-                     "--ppa", "CopyStream:-an"]
 
     args += ["--retries", str(cfg.get("max_retries", 3)), "--no-mtime", "--newline"]
     args.append(url)
@@ -404,7 +402,64 @@ def _rescue(url, out_dir, cfg, tag, base_name, multi, gallerydl_tried,
     return (url, False, reason)
 
 
+#: Extensions that can hold a sound track. Images never pass through ffmpeg.
+VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi", ".flv", ".ts"}
+
+
+def files_under(folder):
+    """Every file below ``folder``, for before/after comparisons."""
+    root = Path(folder)
+    return {p for p in root.rglob("*") if p.is_file()} if root.exists() else set()
+
+
+def strip_audio(path):
+    """Remove the sound from one video file in place. Returns True on success.
+
+    A stream copy, so it takes a moment rather than a re-encode. On any
+    failure the original is left exactly as it was: a file with sound is a
+    lesser problem than a file that is gone.
+    """
+    path = Path(path)
+    tmp = path.with_name(f"{path.stem}.noaudio-tmp{path.suffix}")
+    rc, out = run_quiet([FFMPEG_EXE, "-y", "-v", "error", "-i", path,
+                         "-map", "0:v", "-c", "copy", tmp], timeout=600)
+    if rc == 0 and tmp.exists() and tmp.stat().st_size > 0:
+        tmp.replace(path)
+        return True
+    _unlink(tmp)
+    log(f"  Could not remove the sound from {path.name}: "
+        f"{out.strip()[-200:] or 'ffmpeg failed'}", "WARN")
+    return False
+
+
 def download_single(url, cfg, index, total, resolution_override=None):
+    """Download one URL with smart retry. Returns (url, success, message).
+
+    In Video Only mode the sound is removed here, after the fact, from every
+    new video file. This is the one place every route passes through:
+    yt-dlp, gallery-dl for carousels, the TikTok embed fallback. Doing it in
+    any one of them missed the others — Instagram reels and carousels kept
+    their sound in 3.6.0.
+    """
+    if cfg.get("mode") != "video_only":
+        return _download_single(url, cfg, index, total, resolution_override)
+
+    # ponytail: scans the whole output folder twice per link; return written
+    # paths from each route if that gets slow on a huge folder.
+    root = cfg.get("output_dir", OUTPUT_DIR)
+    before = files_under(root)
+    result = _download_single(url, cfg, index, total, resolution_override)
+    if result[1]:
+        videos = sorted(f for f in files_under(root) - before
+                        if f.suffix.lower() in VIDEO_EXTS)
+        stripped = sum(strip_audio(f) for f in videos)
+        if videos:
+            log(f"[{index}/{total}] Sound removed from {stripped} of "
+                f"{len(videos)} video(s)", "OK" if stripped == len(videos) else "WARN")
+    return result
+
+
+def _download_single(url, cfg, index, total, resolution_override=None):
     """Download one URL with smart retry. Returns (url, success, message)."""
     tag = f"[{index}/{total}]"
     max_attempts = cfg.get("max_retries", 3)

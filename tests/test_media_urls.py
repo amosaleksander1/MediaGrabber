@@ -141,8 +141,9 @@ def check_args(fail):
     if "--recode-video" in ig or "best" not in ig or "--yes-playlist" not in ig:
         fail("instagram carousel: expected -f best with --yes-playlist")
 
-    # Video Only: the silent stream when there is one, and the sound stripped
-    # from whatever comes back, so a combined-only site is silent too.
+    # Video Only asks yt-dlp for the silent stream where there is one, so no
+    # sound is downloaded just to be dropped. Removing what sound remains is
+    # check_video_only_strips's business, not the arguments'.
     for res, pick in (("1080", "bestvideo[height<=1080]/best[height<=1080]/best"),
                       ("best", "bestvideo/best"), ("worst", "worstvideo/worst")):
         silent = build_ytdlp_args("https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -151,11 +152,6 @@ def check_args(fail):
             fail(f"video only @ {res}: expected -f {pick}")
         if any("bestaudio" in a or "worstaudio" in a for a in silent):
             fail(f"video only @ {res}: must not download the audio stream")
-        if "CopyStream:-an" not in silent or "--recode-video" not in silent:
-            fail(f"video only @ {res}: expected the -an strip and the recode")
-    loud = build_ytdlp_args("https://www.youtube.com/watch?v=dQw4w9WgXcQ", _cfg("video"))
-    if "CopyStream:-an" in loud:
-        fail("video / image mode must keep its sound")
 
     audio = build_ytdlp_args("https://x.com/nasa/status/1889912345678", _cfg("audio"))
     if "-x" not in audio:
@@ -385,12 +381,84 @@ def check_rename_applies_naming(fail):
             fail(f"carousel items disagree on their shared name: {stems}")
 
 
+def check_video_only_strips(fail):
+    """Video Only silences every route, not just plain yt-dlp links.
+
+    3.6.0 put the "no sound" step on yt-dlp's arguments alone. An Instagram
+    reel takes the carousel branch of those arguments and a multi-item post
+    goes to gallery-dl, so both kept their sound. Each route is faked here by
+    the files it would leave behind; what matters is that every new video,
+    wherever it landed, goes through strip_audio, and nothing else does.
+    """
+    from mediagrabber import download
+
+    real_single, real_strip = download._download_single, download.strip_audio
+    stripped = []
+    download.strip_audio = lambda p: stripped.append(pathlib.Path(p).name) or True
+
+    def fake_route(url, cfg, *a, **k):
+        out = pathlib.Path(cfg["output_dir"])
+        (out / "@someone - reel.mp4").write_bytes(b"v")            # yt-dlp reel
+        post = out / "@someone - carousel"                          # gallery-dl
+        post.mkdir(exist_ok=True)
+        (post / "@someone - carousel - 01.jpg").write_bytes(b"i")
+        (post / "@someone - carousel - 02.MP4").write_bytes(b"v")
+        return (url, True, "OK")
+
+    download._download_single = fake_route
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            (pathlib.Path(d) / "already there.mp4").write_bytes(b"old")
+            for mode in ("video", "video_only"):
+                stripped.clear()
+                cfg = dict(_cfg(mode), output_dir=d)
+                download.download_single("https://www.instagram.com/reel/X/",
+                                         cfg, 1, 1)
+                want = ([] if mode == "video" else
+                        ["@someone - carousel - 02.MP4", "@someone - reel.mp4"])
+                if sorted(stripped) != want:
+                    fail(f"{mode}: sound removed from {sorted(stripped)}, "
+                         f"expected {want}")
+                for f in pathlib.Path(d).rglob("*"):
+                    if f.is_file() and f.name != "already there.mp4":
+                        f.unlink()
+    finally:
+        download._download_single, download.strip_audio = real_single, real_strip
+
+    # The real ffmpeg step, where ffmpeg is available (a local checkout with
+    # tools/; CI has none and skips this).
+    from mediagrabber.config import FFMPEG_EXE, FFPROBE_EXE
+    from mediagrabber.shell import run_quiet
+    if not (FFMPEG_EXE.exists() and FFPROBE_EXE.exists()):
+        return
+    with tempfile.TemporaryDirectory() as d:
+        clip = pathlib.Path(d) / "clip.mp4"
+        rc, out = run_quiet([FFMPEG_EXE, "-v", "error", "-f", "lavfi", "-i",
+                             "testsrc=d=1:s=64x64", "-f", "lavfi", "-i",
+                             "sine=d=1", "-shortest", clip])
+        if rc != 0:
+            fail(f"could not make a test clip: {out[-200:]}")
+            return
+
+        def streams():
+            return run_quiet([FFPROBE_EXE, "-v", "error", "-show_entries",
+                              "stream=codec_type", "-of", "csv=p=0", clip])[1].split()
+
+        if streams() != ["video", "audio"]:
+            fail(f"test clip should have sound, has {streams()}")
+        if not download.strip_audio(clip) or streams() != ["video"]:
+            fail(f"strip_audio left streams {streams()}")
+        if list(pathlib.Path(d).glob("*noaudio-tmp*")):
+            fail("strip_audio left its temp file behind")
+
+
 def main():
     failures = []
     fail = failures.append
 
     check_urls(fail)
     check_args(fail)
+    check_video_only_strips(fail)
     check_naming(fail)
     check_rename_applies_naming(fail)
     check_post_contents(fail)
