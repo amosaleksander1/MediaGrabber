@@ -1,8 +1,8 @@
 {
-  "checked_at": "2026-11-02",
+  "checked_at": "2026-11-09",
   "upstream": {
     "yt-dlp": "2026.10.26",
-    "gallery-dl": "2026.11.02",
+    "gallery-dl": "2026.11.09",
     "deno": "v2.9.8",
     "ffmpeg-btbn": "latest",
     "ffmpeg-macos-arm64": "1789931890_9.0.2",
